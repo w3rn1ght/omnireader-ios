@@ -208,14 +208,4 @@
     scrollView.contentInset = UIEdgeInsetsMake(offsetY, offsetX, offsetY, offsetX);
 }
 
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.view.backgroundColor = [UIColor blackColor];
-    self.cache = [[NSCache alloc] init];
-    self.cache.countLimit = 5;
-    [self openArchive];
-    [self buildInterface];
-    [self showPage:0];
-}
-
 @end
