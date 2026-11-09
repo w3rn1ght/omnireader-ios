@@ -11,7 +11,6 @@
 @property (nonatomic, strong, nullable) NSDictionary *catalog;
 @property (nonatomic, strong) NSArray<NSDictionary *> *entries;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
-@property (nonatomic, strong) UIRefreshControl *refreshControl;
 @property (nonatomic) BOOL loading;
 @end
 
@@ -81,9 +80,8 @@
     self.tableView.rowHeight = 68;
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.spinner];
-    self.refreshControl = [[UIRefreshControl alloc] init];
-    [self.refreshControl addTarget:self action:@selector(loadFeed) forControlEvents:UIControlEventValueChanged];
-    self.tableView.refreshControl = self.refreshControl;
+    self.tableView.refreshControl = [[UIRefreshControl alloc] init];
+    [self.tableView.refreshControl addTarget:self action:@selector(loadFeed) forControlEvents:UIControlEventValueChanged];
     [self loadFeed];
 }
 
@@ -97,7 +95,7 @@
         if (!strongSelf) return;
         strongSelf.loading = NO;
         [strongSelf.spinner stopAnimating];
-        [strongSelf.refreshControl endRefreshing];
+        [strongSelf.tableView.refreshControl endRefreshing];
         if (!feed) {
             [ORUtil presentAlertIn:strongSelf title:@"OPDS" message:error.localizedDescription ?: @"Не удалось загрузить каталог."];
             return;
