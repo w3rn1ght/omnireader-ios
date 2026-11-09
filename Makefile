@@ -9,7 +9,7 @@ OmniReader_FILES = $(wildcard Sources/*.m)
 OmniReader_FRAMEWORKS = UIKit Foundation WebKit PDFKit QuickLook AVFoundation \
 	MediaPlayer AuthenticationServices CoreMedia QuartzCore Security
 OmniReader_LIBRARIES = z
-OmniReader_CFLAGS = -fobjc-arc -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations
+OmniReader_CFLAGS = -fobjc-arc -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations -Wno-error
 OmniReader_INSTALL_PATH = /Applications
 OmniReader_RESOURCE_DIRS = Resources
 OmniReader_CODESIGN_FLAGS = -S

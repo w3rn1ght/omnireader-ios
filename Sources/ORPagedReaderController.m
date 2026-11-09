@@ -140,7 +140,6 @@
 }
 
 - (void)setupChrome {
-    UIColor *background = [[ORSettings shared] themeBackgroundColor];
     UIColor *text = [[ORSettings shared] themeTextColor];
 
     self.topBar = [[UIView alloc] init];
@@ -189,13 +188,11 @@
 
     NSArray *titles = @[@"Aa", @"☰", @"🔊"];
     SEL actions[] = {@selector(showReaderSettings), @selector(showContents), @selector(toggleSpeech)};
-    UIButton *previous = nil;
     for (NSUInteger i = 0; i < titles.count; i++) {
         UIButton *button = [self barButtonWithTitle:titles[i] action:actions[i]];
         button.tag = 100 + (NSInteger)i;
         [self.bottomBar addSubview:button];
         if (i == 2) self.speechButton = button;
-        previous = button;
     }
     self.chromeVisible = NO;
     self.topBar.alpha = 0;
