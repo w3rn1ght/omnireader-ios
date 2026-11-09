@@ -1,0 +1,13 @@
+#!/bin/sh
+# Refresh the SpringBoard icon cache after installing the app.
+set +e
+
+if command -v uicache >/dev/null 2>&1; then
+    uicache -p /Applications/OmniReader.app >/dev/null 2>&1
+fi
+
+if command -v sbreload >/dev/null 2>&1; then
+    sbreload >/dev/null 2>&1
+fi
+
+exit 0

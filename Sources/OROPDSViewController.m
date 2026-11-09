@@ -1,0 +1,234 @@
+#import "OROPDSViewController.h"
+#import "ORBookImporter.h"
+#import "ORCore.h"
+#import "OROPDS.h"
+#import "ORSettingsViewController.h"
+#import "ORUtil.h"
+
+@interface OROPDSViewController ()
+@property (nonatomic, copy) NSString *feedURL;
+@property (nonatomic, copy) NSString *feedTitle;
+@property (nonatomic, strong, nullable) NSDictionary *catalog;
+@property (nonatomic, strong) NSArray<NSDictionary *> *entries;
+@property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic, strong) UIRefreshControl *refreshControl;
+@property (nonatomic) BOOL loading;
+@end
+
+@implementation OROPDSViewController
+
++ (void)presentPickerFrom:(UIViewController *)presenter {
+    if (!presenter) return;
+    NSArray<NSDictionary *> *catalogs = [ORSettings shared].opdsCatalogs;
+    if (catalogs.count == 0) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Каталоги OPDS"
+                                                                      message:@"Сначала добавьте каталог в настройках. Подойдёт любой OPDS-каталог, например Project Gutenberg или ваш Calibre-сервер."
+                                                               preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Настройки" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            ORSettingsViewController *settings = [[ORSettingsViewController alloc] init];
+            [presenter.navigationController pushViewController:settings animated:YES];
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Отмена" style:UIAlertActionStyleCancel handler:nil]];
+        [presenter presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Каталоги OPDS"
+                                                                  message:nil
+                                                           preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSDictionary *catalog in catalogs) {
+        NSString *name = catalog[@"name"] ?: catalog[@"url"] ?: @"Каталог";
+        [sheet addAction:[UIAlertAction actionWithTitle:name style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [self presentCatalog:catalog from:presenter];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Добавить каталог" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        ORSettingsViewController *settings = [[ORSettingsViewController alloc] init];
+        [presenter.navigationController pushViewController:settings animated:YES];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Отмена" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.sourceView = presenter.view;
+    sheet.popoverPresentationController.sourceRect = CGRectMake(presenter.view.bounds.size.width / 2,
+                                                               presenter.view.bounds.size.height / 2, 1, 1);
+    [presenter presentViewController:sheet animated:YES completion:nil];
+}
+
++ (void)presentCatalog:(NSDictionary *)catalog from:(UIViewController *)presenter {
+    NSString *url = catalog[@"url"];
+    if (url.length == 0) return;
+    OROPDSViewController *browser = [[OROPDSViewController alloc] initWithURL:url
+                                                                       title:catalog[@"name"] ?: @"Каталог"
+                                                                     catalog:catalog];
+    [presenter.navigationController pushViewController:browser animated:YES];
+}
+
+- (instancetype)initWithURL:(NSString *)url
+                      title:(NSString *)title
+                    catalog:(NSDictionary *)catalog {
+    self = [super initWithStyle:UITableViewStylePlain];
+    if (self) {
+        _feedURL = [url copy];
+        _feedTitle = [title copy] ?: @"Каталог";
+        _catalog = catalog;
+        _entries = @[];
+        self.title = _feedTitle;
+    }
+    return self;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.tableView.rowHeight = 68;
+    self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.spinner];
+    self.refreshControl = [[UIRefreshControl alloc] init];
+    [self.refreshControl addTarget:self action:@selector(loadFeed) forControlEvents:UIControlEventValueChanged];
+    self.tableView.refreshControl = self.refreshControl;
+    [self loadFeed];
+}
+
+- (void)loadFeed {
+    if (self.loading) return;
+    self.loading = YES;
+    [self.spinner startAnimating];
+    __weak typeof(self) weakSelf = self;
+    [OROPDS loadFeedAtURL:self.feedURL catalog:self.catalog completion:^(NSDictionary *feed, NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.loading = NO;
+        [strongSelf.spinner stopAnimating];
+        [strongSelf.refreshControl endRefreshing];
+        if (!feed) {
+            [ORUtil presentAlertIn:strongSelf title:@"OPDS" message:error.localizedDescription ?: @"Не удалось загрузить каталог."];
+            return;
+        }
+        strongSelf.title = feed[@"title"] ?: strongSelf.feedTitle;
+        strongSelf.entries = feed[@"entries"] ?: @[];
+        [strongSelf.tableView reloadData];
+    }];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return (NSInteger)self.entries.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *identifier = @"OPDSEntry";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:identifier];
+        cell.detailTextLabel.numberOfLines = 2;
+        cell.textLabel.numberOfLines = 2;
+    }
+    NSDictionary *entry = self.entries[(NSUInteger)indexPath.row];
+    cell.textLabel.text = entry[@"title"];
+    NSString *author = entry[@"author"];
+    NSString *summary = entry[@"summary"];
+    if (author.length > 0) {
+        cell.detailTextLabel.text = author;
+    } else if (summary.length > 0) {
+        cell.detailTextLabel.text = summary;
+    } else {
+        cell.detailTextLabel.text = [entry[@"navigation"] boolValue] ? @"Раздел" : @"Скачать";
+    }
+    cell.accessoryType = [entry[@"navigation"] boolValue] ? UITableViewCellAccessoryDisclosureIndicator
+                                                          : UITableViewCellAccessoryNone;
+    cell.imageView.image = nil;
+    NSString *imageURL = entry[@"image"];
+    if (imageURL.length > 0) {
+        cell.imageView.image = [UIImage imageNamed:@"book"];
+        NSURL *url = [NSURL URLWithString:imageURL];
+        if (url) {
+            [[[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+                if (!data) return;
+                UIImage *image = [UIImage imageWithData:data];
+                if (!image) return;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    NSIndexPath *current = [tableView indexPathForCell:cell];
+                    if (current && current.row == indexPath.row) {
+                        cell.imageView.image = image;
+                        [cell setNeedsLayout];
+                    }
+                });
+            }] resume];
+        }
+    }
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    NSDictionary *entry = self.entries[(NSUInteger)indexPath.row];
+
+    if ([entry[@"navigation"] boolValue]) {
+        NSString *next = nil;
+        for (NSDictionary *link in entry[@"links"] ?: @[]) {
+            NSString *rel = link[@"rel"] ?: @"";
+            if ([rel isEqualToString:@"subsection"] || [rel containsString:@"navigation"]) {
+                next = link[@"href"];
+                break;
+            }
+        }
+        if (next.length == 0) {
+            for (NSDictionary *link in entry[@"links"] ?: @[]) {
+                if ([link[@"type"] containsString:@"atom"] || [link[@"type"] containsString:@"xml"]) {
+                    next = link[@"href"];
+                    break;
+                }
+            }
+        }
+        if (next.length > 0) {
+            OROPDSViewController *browser = [[OROPDSViewController alloc] initWithURL:next
+                                                                               title:entry[@"title"]
+                                                                             catalog:self.catalog];
+            [self.navigationController pushViewController:browser animated:YES];
+        }
+        return;
+    }
+
+    [self downloadEntry:entry];
+}
+
+- (void)downloadEntry:(NSDictionary *)entry {
+    [self.spinner startAnimating];
+    self.view.userInteractionEnabled = NO;
+    __weak typeof(self) weakSelf = self;
+    [OROPDS downloadEntry:entry catalog:self.catalog formatHint:nil completion:^(NSString *path, NSString *suggestedName, NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.view.userInteractionEnabled = YES;
+        [strongSelf.spinner stopAnimating];
+        if (!path) {
+            [ORUtil presentAlertIn:strongSelf title:@"OPDS" message:error.localizedDescription ?: @"Не удалось скачать файл."];
+            return;
+        }
+        // Give the temporary file a human readable name before importing.
+        NSString *extension = path.pathExtension;
+        NSString *base = suggestedName.stringByDeletingPathExtension ?: @"book";
+        base = [base stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+        base = [base stringByReplacingOccurrencesOfString:@":" withString:@"_"];
+        if (base.length > 80) base = [base substringToIndex:80];
+        NSString *named = [[ORPaths cacheDirectory] stringByAppendingPathComponent:
+                              [NSString stringWithFormat:@"%@.%@", base, extension]];
+        [[NSFileManager defaultManager] removeItemAtPath:named error:NULL];
+        NSError *moveError = nil;
+        BOOL moved = [[NSFileManager defaultManager] moveItemAtPath:path toPath:named error:&moveError];
+        NSString *sourcePath = moved ? named : path;
+        NSString *ext = sourcePath.pathExtension.lowercaseString;
+        if ([ext isEqualToString:@"zip"] && ![base.lowercaseString hasSuffix:@".cbz"]) {
+            // A plain zip from OPDS is usually a comic archive.
+        }
+        [[ORBookImporter shared] importFileAtURL:[NSURL fileURLWithPath:sourcePath] completion:^(ORBook *book, NSError *importError) {
+            [[NSFileManager defaultManager] removeItemAtPath:sourcePath error:NULL];
+            if (importError || !book) {
+                [ORUtil presentAlertIn:strongSelf title:@"Импорт"
+                                message:importError.localizedDescription ?: @"Не удалось добавить книгу."];
+                return;
+            }
+            [ORUtil presentAlertIn:strongSelf title:@"Готово"
+                            message:[NSString stringWithFormat:@"«%@» добавлена в библиотеку.", book.title]];
+        }];
+    }];
+}
+
+@end

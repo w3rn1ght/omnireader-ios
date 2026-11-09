@@ -1,0 +1,8 @@
+.theos/
+packages/
+Resources/*.storyboardc/
+Resources/*.lproj/
+build/
+*.deb
+*.ipa
+.DS_Store
