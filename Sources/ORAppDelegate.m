@@ -32,10 +32,6 @@
 - (void)configureAppearance {
     UINavigationBar *navigationBar = [UINavigationBar appearance];
     navigationBar.tintColor = [UIColor colorWithRed:0.72 green:0.34 blue:0.16 alpha:1.0];
-    if (@available(iOS 13.0, *)) {
-        // The app has its own light palette; do not flip it with the system theme.
-        navigationBar.overrideUserInterfaceStyle = UIUserInterfaceStyleLight;
-    }
     [UITableView appearance].sectionIndexColor = [UIColor darkGrayColor];
 }
 
