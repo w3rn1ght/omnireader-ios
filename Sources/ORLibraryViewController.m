@@ -210,7 +210,7 @@ static NSString *const ORLibrarySortKey = @"or.librarySort";
     self.view.backgroundColor = [UIColor groupTableViewBackgroundColor];
     self.title = @"Библиотека";
     self.navigationController.navigationBar.prefersLargeTitles = YES;
-    self.navigationItem.largeTitleDisplayMode = UINavigationBarLargeTitleModeAlways;
+    self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeAlways;
 
     self.searchText = @"";
     self.filterIndex = 0;
