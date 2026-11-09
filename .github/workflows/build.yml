@@ -43,11 +43,6 @@ jobs:
           cp -R iPhoneOS12.4.sdk "$THEOS/sdks/"
           ls -la "$THEOS/sdks"
 
-      - name: Compile launch storyboard
-        run: |
-          mkdir -p Resources
-          xcrun ibtool --compile Resources/LaunchScreen.storyboardc Support/LaunchScreen.storyboard
-
       - name: Build package
         run: |
           chmod +x layout/DEBIAN/postinst layout/DEBIAN/postrm

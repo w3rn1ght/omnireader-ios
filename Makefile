@@ -15,10 +15,3 @@ OmniReader_RESOURCE_DIRS = Resources
 OmniReader_CODESIGN_FLAGS = -S
 
 include $(THEOS_MAKE_PATH)/application.mk
-
-# Storyboard is compiled with ibtool (Xcode is required to build Theos apps anyway).
-before-OmniReader-all:: Resources/LaunchScreen.storyboardc
-
-Resources/LaunchScreen.storyboardc: Support/LaunchScreen.storyboard
-	@mkdir -p Resources
-	xcrun ibtool --compile "$@" "$<"
