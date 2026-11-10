@@ -8,21 +8,6 @@
 + (NSString *)graphqlPath;
 + (NSString *)profilePath;
 + (void)fetchLoginProfile:(ORYandexProfileCompletion)completion;
-
-+ (void)performGraphQLForDebug:(NSString *)query
-                    completion:(void (^)(NSString *, NSError *))completion {
-    [self graphql:query variables:nil completion:^(id data, NSError *error) {
-        if (error) {
-            completion(nil, error);
-            return;
-        }
-        NSData *json = [NSJSONSerialization dataWithJSONObject:data ?: @{} options:0 error:NULL];
-        NSString *text = [[NSString alloc] initWithData:json ?: [NSData data] encoding:NSUTF8StringEncoding];
-        if (text.length > 600) text = [[text substringToIndex:600] stringByAppendingString:@"…"];
-        completion(text, nil);
-    }];
-}
-
 + (void)fetchProfileLegacy:(ORYandexProfileCompletion)completion;
 + (void)fetchShelfLegacy:(ORYandexShelfCompletion)completion;
 + (void)graphql:(NSString *)query
