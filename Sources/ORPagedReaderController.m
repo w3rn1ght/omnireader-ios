@@ -42,6 +42,7 @@
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) UITableView *searchResults;
 @property (nonatomic, strong) NSArray<NSString *> *searchHits;
+@property (nonatomic, strong, nullable) NSTimer *liveSearchTimer;
 
 @property (nonatomic) BOOL chromeVisible;
 @property (nonatomic) BOOL needsInitialJump;
@@ -551,7 +552,7 @@
     }];
     [alert addAction:[UIAlertAction actionWithTitle:@"Сохранить" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         NSString *note = alert.textFields.firstObject.text ?: @"";
-        NSMutableArray *bookmarks = [[ORLibrary shared] bookWithID:self.book.bookID].bookmarks.mutableCopy;
+        NSMutableArray *bookmarks = [self.book.bookmarks mutableCopy] ?: [NSMutableArray array];
         for (NSUInteger i = 0; i < bookmarks.count; i++) {
             if (fabs([bookmarks[i][@"fraction"] doubleValue] - fraction) < 0.005) {
                 NSMutableDictionary *updated = [bookmarks[i] mutableCopy];
@@ -644,12 +645,26 @@
 }
 
 - (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
-    NSString *query = searchText;
-    if (query.length < 2) {
+    [self.liveSearchTimer invalidate];
+    self.liveSearchTimer = nil;
+    if (searchText.length < 2) {
         self.searchHits = @[];
         [self.searchResults reloadData];
         return;
     }
+    self.liveSearchTimer = [NSTimer scheduledTimerWithTimeInterval:0.4
+                                                            target:self
+                                                          selector:@selector(liveSearchFired:)
+                                                          userInfo:searchText
+                                                           repeats:NO];
+}
+
+- (void)liveSearchFired:(NSTimer *)timer {
+    [self performLiveSearch:(NSString *)(timer.userInfo ?: @"")];
+}
+
+- (void)performLiveSearch:(NSString *)query {
+    if (query.length < 2) return;
     NSMutableArray<NSString *> *hits = [NSMutableArray array];
     NSString *pattern = [NSString stringWithFormat:
         @"(?i)(.{0,40})(%@)(.{0,60})", [self escapedRegex:query]];
