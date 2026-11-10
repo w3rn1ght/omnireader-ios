@@ -77,7 +77,7 @@
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (![ORYandexAuth shared].isSignedIn) return 3;
+    if (![ORYandexAuth shared].isSignedIn) return 4;
     return MAX(1, (NSInteger)self.items.count);
 }
 
@@ -98,9 +98,12 @@
         } else if (indexPath.row == 1) {
             cell.textLabel.text = @"Войти через Safari";
             cell.detailTextLabel.text = @"Если окно внутри приложения не реагирует";
+        } else if (indexPath.row == 2) {
+            cell.textLabel.text = @"Ссылка для входа на компьютере";
+            cell.detailTextLabel.text = @"Скопировать и открыть на ПК, затем вставить токен";
         } else {
-            cell.textLabel.text = @"Импортировать купленную книгу";
-            cell.detailTextLabel.text = @"«+» → «Импортировать файл» в библиотеке";
+            cell.textLabel.text = @"Вставить токен вручную";
+            cell.detailTextLabel.text = @"Можно вставить всю callback-ссылку";
         }
         cell.textLabel.textColor = self.view.tintColor;
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
@@ -152,13 +155,41 @@
             [self signIn];
         } else if (indexPath.row == 1) {
             [self signInWithSafari];
+        } else if (indexPath.row == 2) {
+            [self copyAuthorizationLink];
         } else {
-            [self.navigationController popViewControllerAnimated:YES];
+            [[ORYandexAuth shared] promptForManualTokenFrom:self completion:^(BOOL success, NSError *error) {
+                [self.tableView reloadData];
+                if (success) [self loadShelf];
+                else if (error) [ORUtil presentAlertIn:self title:@"Яндекс Книги" message:error.localizedDescription];
+            }];
         }
         return;
     }
     if (self.items.count == 0) return;
     [self downloadItem:self.items[(NSUInteger)indexPath.row]];
+}
+
+- (void)copyAuthorizationLink {
+    NSURL *url = [ORYandexAuth authorizationURL];
+    if (!url) {
+        [ORUtil presentAlertIn:self title:@"Нужен Client ID"
+                        message:@"Сначала укажите Client ID приложения OAuth в настройках: Настройки → Яндекс Книги → Client ID OAuth."];
+        return;
+    }
+    [UIPasteboard generalPasteboard].string = url.absoluteString;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Ссылка скопирована"
+                                                                  message:@"1. Откройте ссылку на компьютере.\n2. Войдите в Яндекс и разрешите доступ.\n3. Браузер перенаправит на omnireader://oauth#access_token=… — скопируйте этот адрес целиком.\n4. Вернитесь в приложение и выберите «Вставить токен вручную» — можно вставить всю ссылку."
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Вставить токен" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [[ORYandexAuth shared] promptForManualTokenFrom:self completion:^(BOOL success, NSError *error) {
+            [self.tableView reloadData];
+            if (success) [self loadShelf];
+            else if (error) [ORUtil presentAlertIn:self title:@"Яндекс Книги" message:error.localizedDescription];
+        }];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Закрыть" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)signInWithSafari {

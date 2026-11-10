@@ -16,12 +16,19 @@ extern NSNotificationName const ORYandexAuthDidChangeNotification;
 /// URL for the in-app/session login. Nil when no Client ID is configured.
 + (nullable NSURL *)authorizationURL;
 
+/// Extracts an OAuth token from a pasted token or from a full callback URL
+/// (`omnireader://oauth#access_token=...`).
++ (nullable NSString *)tokenFromPastedString:(NSString *)string;
+
 /// Handles `omnireader://oauth#access_token=...` coming from Safari or the
 /// system, stores the token and returns YES when it was an OAuth callback.
 + (BOOL)handleCallbackURL:(NSURL *)url;
 
 - (void)signInFrom:(UIViewController *)host
         completion:(void (^)(BOOL success, NSError *_Nullable error))completion;
+
+- (void)promptForManualTokenFrom:(UIViewController *)host
+                      completion:(nullable void (^)(BOOL success, NSError *_Nullable error))completion;
 
 - (void)setManualToken:(NSString *)token;
 - (void)signOut;

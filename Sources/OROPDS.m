@@ -98,10 +98,16 @@
         BOOL navigation = NO;
         BOOL acquisition = NO;
         for (NSDictionary *link in entryLinks) {
-            NSString *rel = link[@"rel"] ?: @"";
-            NSString *type = link[@"type"] ?: @"";
+            NSString *rel = (NSString *)(link[@"rel"] ?: @"");
+            NSString *type = (NSString *)(link[@"type"] ?: @"");
             NSString *lowerRel = rel.lowercaseString;
+            NSString *lowerType = type.lowercaseString;
             if ([lowerRel containsString:@"subsection"] || [lowerRel containsString:@"navigation"]) {
+                navigation = YES;
+            }
+            // Many catalogs (including lib.rus.ec) mark subsections only by the
+            // OPDS/Atom MIME type, with rel="alternate" or no rel at all.
+            if ([lowerType containsString:@"atom+xml"] || [lowerType containsString:@"opds-catalog"]) {
                 navigation = YES;
             }
             // Some catalogs use the short "acquisition" rel, some use the full

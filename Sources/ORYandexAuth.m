@@ -35,9 +35,37 @@ NSNotificationName const ORYandexAuthDidChangeNotification = @"ORYandexAuthDidCh
 }
 
 - (void)setManualToken:(NSString *)token {
-    [ORSettings shared].yandexToken = token;
+    NSString *normalized = [ORYandexAuth tokenFromPastedString:token];
+    if (normalized.length == 0) return;
+    [ORSettings shared].yandexToken = normalized;
     [self refreshProfile];
     [[NSNotificationCenter defaultCenter] postNotificationName:ORYandexAuthDidChangeNotification object:self];
+}
+
++ (NSString *)tokenFromPastedString:(NSString *)string {
+    if (string.length == 0) return @"";
+    NSString *trimmed = [string stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSRange marker = [trimmed rangeOfString:@"access_token="];
+    if (marker.location != NSNotFound) {
+        NSString *tail = [trimmed substringFromIndex:NSMaxRange(marker)];
+        NSRange amp = [tail rangeOfString:@"&"];
+        if (amp.location != NSNotFound) tail = [tail substringToIndex:amp.location];
+        NSRange hash = [tail rangeOfString:@"#"];
+        if (hash.location != NSNotFound) tail = [tail substringToIndex:hash.location];
+        tail = [tail stringByRemovingPercentEncoding] ?: tail;
+        tail = [tail stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        return tail;
+    }
+    // A whole URL without a token is not a token.
+    if ([trimmed containsString:@"://"]) return @"";
+    trimmed = [trimmed stringByTrimmingCharactersInSet:
+                   [NSCharacterSet characterSetWithCharactersInString:@"\"'"]];
+    return trimmed;
+}
+
+- (void)promptForManualTokenFrom:(UIViewController *)host
+                      completion:(void (^)(BOOL, NSError *))completion {
+    [self promptForTokenIn:host completion:completion ?: ^(BOOL success, NSError *error) {}];
 }
 
 - (void)signOut {
@@ -122,22 +150,25 @@ NSNotificationName const ORYandexAuthDidChangeNotification = @"ORYandexAuthDidCh
 - (void)promptForTokenIn:(UIViewController *)host completion:(void (^)(BOOL, NSError *))completion {
     if (!host) return;
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Токен Яндекс Книг"
-                                                                  message:@"Вставьте OAuth-токен. Чтобы входить через браузер, укажите Client ID приложения в настройках."
+                                                                  message:@"Вставьте токен или всю ссылку, на которую перенаправил браузер (она начинается с omnireader://oauth#access_token=…)."
                                                            preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-        textField.placeholder = @"y0_Ag…";
+        textField.placeholder = @"y0_Ag… или omnireader://oauth#access_token=…";
         textField.autocorrectionType = UITextAutocorrectionTypeNo;
         textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
     }];
     [alert addAction:[UIAlertAction actionWithTitle:@"Сохранить" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        NSString *token = alert.textFields.firstObject.text ?: @"";
+        NSString *pasted = alert.textFields.firstObject.text ?: @"";
+        NSString *token = [ORYandexAuth tokenFromPastedString:pasted];
         if (token.length < 8) {
             completion(NO, [NSError errorWithDomain:@"OmniReader.Yandex" code:5
-                                           userInfo:@{NSLocalizedDescriptionKey: @"Токен слишком короткий"}]);
+                                           userInfo:@{NSLocalizedDescriptionKey:
+                                                          @"Не удалось найти access_token. Скопируйте адрес целиком, включая #access_token=…"}]);
             return;
         }
         [ORSettings shared].yandexToken = token;
         [self refreshProfile];
+        [[NSNotificationCenter defaultCenter] postNotificationName:ORYandexAuthDidChangeNotification object:self];
         completion(YES, nil);
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Отмена" style:UIAlertActionStyleCancel handler:nil]];
