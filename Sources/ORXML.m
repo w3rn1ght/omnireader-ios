@@ -128,6 +128,32 @@ didStartElement:(NSString *)elementName
 
 @implementation ORXML
 
++ (ORXMLNode *)parseData:(NSData *)data error:(NSError **)error {
+    if (data.length == 0) {
+        if (error) *error = [NSError errorWithDomain:@"OmniReader.XML" code:1
+                                            userInfo:@{NSLocalizedDescriptionKey: @"Пустые XML-данные"}];
+        return nil;
+    }
+    NSError *strictError = nil;
+    ORXMLNode *root = [self parseDataStrict:data error:&strictError];
+    if (root && !strictError) return root;
+
+    // Real feeds (lib.rus.ec and friends) contain raw '&' inside summaries,
+    // which makes them invalid XML. Repair and retry before giving up.
+    NSData *repaired = [self repairXMLData:data];
+    if (repaired.length > 0 && ![repaired isEqualToData:data]) {
+        ORXMLNode *fixed = [self parseDataStrict:repaired error:NULL];
+        if (fixed) {
+            NSLog(@"[OmniReader] XML repaired before parsing");
+            return fixed;
+        }
+    }
+    if (root) return root;
+    if (error) *error = strictError ?: [NSError errorWithDomain:@"OmniReader.XML" code:2
+                                                       userInfo:@{NSLocalizedDescriptionKey: @"Не удалось разобрать XML"}];
+    return nil;
+}
+
 + (ORXMLNode *)parseDataStrict:(NSData *)data error:(NSError **)error {
     NSXMLParser *parser = [[NSXMLParser alloc] initWithData:data];
     parser.shouldProcessNamespaces = NO;
