@@ -138,69 +138,6 @@
     entry[@"acquisition"] = @(acquisition);
 }
 
-    NSMutableArray *entries = [NSMutableArray array];
-    for (ORXMLNode *entryNode in [root childrenNamed:@"entry"]) {
-        NSMutableDictionary *entry = [NSMutableDictionary dictionary];
-        NSString *entryTitle = [[entryNode firstChildNamed:@"title"] innerText];
-        entry[@"title"] = entryTitle.length > 0 ? entryTitle : @"Без названия";
-        NSString *author = [[[entryNode firstChildNamed:@"author"] firstChildNamed:@"name"] innerText];
-        if (author.length > 0) entry[@"author"] = author;
-        NSString *summary = [[entryNode firstChildNamed:@"content"] innerText];
-        if (summary.length == 0) summary = [[entryNode firstChildNamed:@"summary"] innerText];
-        if (summary.length > 0) entry[@"summary"] = summary;
-        NSString *identifier = [[entryNode firstChildNamed:@"id"] innerText];
-        if (identifier.length > 0) entry[@"id"] = identifier;
-
-        NSMutableArray *entryLinks = [NSMutableArray array];
-        NSString *imageURL = nil;
-        for (ORXMLNode *link in [entryNode childrenNamed:@"link"]) {
-            NSString *rel = [link attr:@"rel"] ?: @"";
-            NSString *href = [link attr:@"href"] ?: @"";
-            NSString *type = [link attr:@"type"] ?: @"";
-            if (href.length == 0) continue;
-            NSString *absolute = [self absoluteURL:href base:baseURL];
-            [entryLinks addObject:@{@"rel": rel, @"href": absolute, @"type": type}];
-            if ([rel containsString:@"image"] || [rel containsString:@"thumbnail"]) {
-                imageURL = absolute;
-            } else if ([type hasPrefix:@"image/"] && imageURL.length == 0) {
-                imageURL = absolute;
-            }
-        }
-        entry[@"links"] = entryLinks;
-        if (imageURL) entry[@"image"] = imageURL;
-
-        BOOL navigation = NO;
-        BOOL acquisition = NO;
-        for (NSDictionary *link in entryLinks) {
-            NSString *rel = (NSString *)(link[@"rel"] ?: @"");
-            NSString *type = (NSString *)(link[@"type"] ?: @"");
-            NSString *lowerRel = rel.lowercaseString;
-            NSString *lowerType = type.lowercaseString;
-            if ([lowerRel containsString:@"subsection"] || [lowerRel containsString:@"navigation"]) {
-                navigation = YES;
-            }
-            // Many catalogs (including lib.rus.ec) mark subsections only by the
-            // OPDS/Atom MIME type, with rel="alternate" or no rel at all.
-            if ([lowerType containsString:@"atom+xml"] || [lowerType containsString:@"opds-catalog"]) {
-                navigation = YES;
-            }
-            // Some catalogs use the short "acquisition" rel, some use the full
-            // opds-spec URI, and some only advertise the MIME type.
-            if ([lowerRel containsString:@"acquisition"] || [lowerRel isEqualToString:@"enclosure"]) {
-                acquisition = YES;
-            } else if ([self isDownloadableType:type]) {
-                acquisition = YES;
-            }
-        }
-        entry[@"navigation"] = @(navigation);
-        entry[@"acquisition"] = @(acquisition);
-        [entries addObject:entry];
-    }
-    feed[@"entries"] = entries;
-    feed[@"baseURL"] = baseURL;
-    return feed;
-}
-
 + (BOOL)isDownloadableType:(NSString *)type {
     if (type.length == 0) return NO;
     NSString *lower = type.lowercaseString;
