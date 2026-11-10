@@ -309,25 +309,21 @@
 }
 
 - (void)updateContentInsets {
-    CGFloat width = self.view.bounds.size.width;
-    CGFloat height = self.view.bounds.size.height;
+    // The reader reserves space with CSS on the '#viewport', never with padding
+    // on '#content': padding on a multicol container breaks column pagination.
     CGFloat top = self.view.safeAreaInsets.top;
     CGFloat bottom = self.view.safeAreaInsets.bottom;
     CGFloat barHeight = 104 + bottom;
-    CGFloat contentTop = 8;
-    CGFloat contentBottom = self.chromeVisible ? (barHeight + 8) : 24;
-    // In horizontal mode the column height is the web view height; in vertical
-    // mode the extra bottom padding simply keeps the last lines reachable.
-    (void)width;
+    (void)top;
     NSString *js = [NSString stringWithFormat:
-        @"(function(){var c=document.getElementById('content');if(!c)return;"
-         "c.style.paddingTop='%.0fpx';c.style.paddingBottom='%.0fpx';"
+        @"(function(){var v=document.getElementById('viewport');if(!v)return;"
+         "v.style.paddingTop='8px';"
+         "v.style.paddingBottom='%.0fpx';"
          "if(window.Omni){var s=window.Omni.state();window.Omni.relayout(s.fraction||0);}})();",
-        contentTop, MAX(80, contentBottom)];
+        MAX(24, barHeight * 0.55)];
     if (!self.needsInitialJump) {
         [self.webView evaluateJavaScript:js completionHandler:nil];
     }
-    (void)top;
 }
 
 #pragma mark - Chrome

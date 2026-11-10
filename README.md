@@ -81,7 +81,7 @@ make package FINALPACKAGE=1
 3. Или по SSH:
 
 ```sh
-dpkg -i com.w3rn1ght.omnireader_1.1.0_iphoneos-arm.deb
+dpkg -i com.w3rn1ght.omnireader_1.1.1_iphoneos-arm.deb
 uicache -p /Applications/OmniReader.app
 ```
 
