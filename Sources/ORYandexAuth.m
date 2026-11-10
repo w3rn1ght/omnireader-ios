@@ -1,11 +1,18 @@
 #import "ORYandexAuth.h"
 #import "ORCore.h"
 #import "ORYandexAPI.h"
+#import "ORText.h"
 #import "ORUtil.h"
 #import <AuthenticationServices/AuthenticationServices.h>
 
+NSNotificationName const ORYandexAuthDidChangeNotification = @"ORYandexAuthDidChangeNotification";
+
 @interface ORYandexAuth ()
 @property (nonatomic, strong) ASWebAuthenticationSession *session;
++ (NSString *)valueForParameter:(NSString *)name inQuery:(NSString *)query;
+- (void)refreshProfile;
+- (void)promptForTokenIn:(UIViewController *)host
+              completion:(void (^)(BOOL success, NSError *_Nullable error))completion;
 @end
 
 @implementation ORYandexAuth
@@ -30,29 +37,42 @@
 - (void)setManualToken:(NSString *)token {
     [ORSettings shared].yandexToken = token;
     [self refreshProfile];
+    [[NSNotificationCenter defaultCenter] postNotificationName:ORYandexAuthDidChangeNotification object:self];
 }
 
 - (void)signOut {
     [ORSettings shared].yandexToken = nil;
     [ORSettings shared].yandexUserName = nil;
+    [[NSNotificationCenter defaultCenter] postNotificationName:ORYandexAuthDidChangeNotification object:self];
+}
+
++ (NSURL *)authorizationURL {
+    NSString *clientID = [ORSettings shared].yandexClientID;
+    if (clientID.length == 0) return nil;
+    NSString *urlString = [NSString stringWithFormat:
+        @"https://oauth.yandex.ru/authorize?response_type=token&client_id=%@&redirect_uri=%@&state=%@",
+        [ORText queryEscape:clientID], @"omnireader%3A%2F%2Foauth", [ORUtil uniqueKey]];
+    return [NSURL URLWithString:urlString];
+}
+
++ (BOOL)handleCallbackURL:(NSURL *)url {
+    if (![url.scheme.lowercaseString isEqualToString:@"omnireader"]) return NO;
+    NSString *fragment = url.fragment ?: @"";
+    NSString *query = url.query ?: @"";
+    NSString *token = [self valueForParameter:@"access_token" inQuery:fragment];
+    if (token.length == 0) token = [self valueForParameter:@"access_token" inQuery:query];
+    if (token.length == 0) return NO;
+    [ORSettings shared].yandexToken = token;
+    [[ORYandexAuth shared] refreshProfile];
+    [[NSNotificationCenter defaultCenter] postNotificationName:ORYandexAuthDidChangeNotification object:self];
+    return YES;
 }
 
 - (void)signInFrom:(UIViewController *)host completion:(void (^)(BOOL, NSError *))completion {
-    NSString *clientID = [ORSettings shared].yandexClientID;
-    if (clientID.length == 0) {
+    NSURL *url = [ORYandexAuth authorizationURL];
+    if (!url) {
         // No registered OAuth app: fall back to a pasted token.
         [self promptForTokenIn:host completion:completion];
-        return;
-    }
-
-    NSString *state = [ORUtil uniqueKey];
-    NSString *urlString = [NSString stringWithFormat:
-        @"https://oauth.yandex.ru/authorize?response_type=token&client_id=%@&redirect_uri=%@&state=%@",
-        clientID, @"omnireader%3A%2F%2Foauth", state];
-    NSURL *url = [NSURL URLWithString:urlString];
-    if (!url) {
-        completion(NO, [NSError errorWithDomain:@"OmniReader.Yandex" code:1
-                                       userInfo:@{NSLocalizedDescriptionKey: @"Некорректный URL авторизации"}]);
         return;
     }
 
@@ -71,17 +91,14 @@
                                            userInfo:@{NSLocalizedDescriptionKey: @"Ошибка авторизации"}]);
             return;
         }
-        NSString *fragment = callbackURL.fragment ?: @"";
-        NSString *token = [self valueForParameter:@"access_token" inQuery:fragment];
-        if (token.length == 0) {
-            NSString *errorDescription = [self valueForParameter:@"error_description" inQuery:fragment] ?: @"Токен не получен";
-            completion(NO, [NSError errorWithDomain:@"OmniReader.Yandex" code:3
-                                           userInfo:@{NSLocalizedDescriptionKey: errorDescription}]);
+        if ([ORYandexAuth handleCallbackURL:callbackURL]) {
+            completion(YES, nil);
             return;
         }
-        [ORSettings shared].yandexToken = token;
-        [self refreshProfile];
-        completion(YES, nil);
+        NSString *fragment = callbackURL.fragment ?: @"";
+        NSString *errorDescription = [ORYandexAuth valueForParameter:@"error_description" inQuery:fragment] ?: @"Токен не получен";
+        completion(NO, [NSError errorWithDomain:@"OmniReader.Yandex" code:3
+                                       userInfo:@{NSLocalizedDescriptionKey: errorDescription}]);
     }];
     BOOL started = [self.session start];
     if (!started) {
@@ -90,7 +107,7 @@
     }
 }
 
-- (NSString *)valueForParameter:(NSString *)name inQuery:(NSString *)query {
++ (NSString *)valueForParameter:(NSString *)name inQuery:(NSString *)query {
     NSArray<NSString *> *pairs = [query componentsSeparatedByString:@"&"];
     for (NSString *pair in pairs) {
         NSArray<NSString *> *parts = [pair componentsSeparatedByString:@"="];

@@ -3,6 +3,7 @@
 #import "ORCore.h"
 #import "ORLibraryViewController.h"
 #import "ORUtil.h"
+#import "ORYandexAuth.h"
 #import <AVFoundation/AVFoundation.h>
 
 @interface ORAppDelegate ()
@@ -46,7 +47,12 @@
             openURL:(NSURL *)url
             options:(NSDictionary<UIApplicationOpenURLOptionsKey, id> *)options {
     if ([url.scheme isEqualToString:@"omnireader"]) {
-        // OAuth callback is handled by ASWebAuthenticationSession.
+        if ([ORYandexAuth handleCallbackURL:url]) {
+            UIViewController *top = [ORUtil topViewController];
+            [ORUtil presentAlertIn:top
+                             title:@"Яндекс Книги"
+                           message:@"Вход выполнен. Откройте «Яндекс Книги» в библиотеке."];
+        }
         return YES;
     }
     return [self openURL:url];

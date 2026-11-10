@@ -158,18 +158,25 @@
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     NSDictionary *entry = self.entries[(NSUInteger)indexPath.row];
 
+    // A book entry may also carry navigation links; a real download wins.
+    if ([entry[@"acquisition"] boolValue]) {
+        [self downloadEntry:entry];
+        return;
+    }
+
     if ([entry[@"navigation"] boolValue]) {
         NSString *next = nil;
         for (NSDictionary *link in entry[@"links"] ?: @[]) {
-            NSString *rel = link[@"rel"] ?: @"";
-            if ([rel isEqualToString:@"subsection"] || [rel containsString:@"navigation"]) {
+            NSString *rel = (link[@"rel"] ?: @"").lowercaseString;
+            if ([rel containsString:@"subsection"] || [rel containsString:@"navigation"]) {
                 next = link[@"href"];
                 break;
             }
         }
         if (next.length == 0) {
             for (NSDictionary *link in entry[@"links"] ?: @[]) {
-                if ([link[@"type"] containsString:@"atom"] || [link[@"type"] containsString:@"xml"]) {
+                NSString *type = (link[@"type"] ?: @"").lowercaseString;
+                if ([type containsString:@"atom"] || [type containsString:@"xml"]) {
                     next = link[@"href"];
                     break;
                 }
@@ -180,11 +187,21 @@
                                                                                title:entry[@"title"]
                                                                              catalog:self.catalog];
             [self.navigationController pushViewController:browser animated:YES];
+            return;
         }
-        return;
     }
 
-    [self downloadEntry:entry];
+    NSMutableArray<NSString *> *kinds = [NSMutableArray array];
+    for (NSDictionary *link in entry[@"links"] ?: @[]) {
+        NSString *type = link[@"type"] ?: @"";
+        if (type.length > 0) [kinds addObject:type];
+    }
+    NSString *detail = kinds.count > 0
+        ? [NSString stringWithFormat:@"Каталог предлагает только: %@", [kinds componentsJoinedByString:@", "]]
+        : @"В записи нет ссылок на файл.";
+    [ORUtil presentAlertIn:self
+                     title:@"Нет файла"
+                   message:[NSString stringWithFormat:@"%@\n\nЕсли это раздел — откройте его. Если каталог требует входа, добавьте логин и пароль в настройках каталога.", detail]];
 }
 
 - (void)downloadEntry:(NSDictionary *)entry {
@@ -201,21 +218,18 @@
             return;
         }
         // Give the temporary file a human readable name before importing.
-        NSString *extension = path.pathExtension;
-        NSString *base = suggestedName.stringByDeletingPathExtension ?: @"book";
+        NSString *extension = path.pathExtension.length > 0 ? path.pathExtension : @"epub";
+        NSString *base = suggestedName.length > 0 ? suggestedName.stringByDeletingPathExtension : @"book";
         base = [base stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
         base = [base stringByReplacingOccurrencesOfString:@":" withString:@"_"];
         if (base.length > 80) base = [base substringToIndex:80];
+        if (base.length == 0) base = @"book";
         NSString *named = [[ORPaths cacheDirectory] stringByAppendingPathComponent:
                               [NSString stringWithFormat:@"%@.%@", base, extension]];
         [[NSFileManager defaultManager] removeItemAtPath:named error:NULL];
         NSError *moveError = nil;
         BOOL moved = [[NSFileManager defaultManager] moveItemAtPath:path toPath:named error:&moveError];
         NSString *sourcePath = moved ? named : path;
-        NSString *ext = sourcePath.pathExtension.lowercaseString;
-        if ([ext isEqualToString:@"zip"] && ![base.lowercaseString hasSuffix:@".cbz"]) {
-            // A plain zip from OPDS is usually a comic archive.
-        }
         [[ORBookImporter shared] importFileAtURL:[NSURL fileURLWithPath:sourcePath] completion:^(ORBook *book, NSError *importError) {
             [[NSFileManager defaultManager] removeItemAtPath:sourcePath error:NULL];
             if (importError || !book) {

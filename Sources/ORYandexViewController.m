@@ -28,6 +28,21 @@
     [self.refreshControl addTarget:self action:@selector(loadShelf) forControlEvents:UIControlEventValueChanged];
     self.tableView.refreshControl = self.refreshControl;
     self.tableView.rowHeight = 74;
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(authChanged)
+                                                 name:ORYandexAuthDidChangeNotification
+                                               object:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)authChanged {
+    [self.tableView reloadData];
+    if ([ORYandexAuth shared].isSignedIn) {
+        [self loadShelf];
+    }
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -62,7 +77,7 @@
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (![ORYandexAuth shared].isSignedIn) return 2;
+    if (![ORYandexAuth shared].isSignedIn) return 3;
     return MAX(1, (NSInteger)self.items.count);
 }
 
@@ -77,11 +92,17 @@
     cell.accessoryType = UITableViewCellAccessoryNone;
 
     if (![ORYandexAuth shared].isSignedIn) {
-        cell.textLabel.text = indexPath.row == 0 ? @"Войти в Яндекс" : @"Импортировать купленную книгу";
+        if (indexPath.row == 0) {
+            cell.textLabel.text = @"Войти в Яндекс";
+            cell.detailTextLabel.text = @"Откроется системное окно OAuth";
+        } else if (indexPath.row == 1) {
+            cell.textLabel.text = @"Войти через Safari";
+            cell.detailTextLabel.text = @"Если окно внутри приложения не реагирует";
+        } else {
+            cell.textLabel.text = @"Импортировать купленную книгу";
+            cell.detailTextLabel.text = @"«+» → «Импортировать файл» в библиотеке";
+        }
         cell.textLabel.textColor = self.view.tintColor;
-        cell.detailTextLabel.text = indexPath.row == 0
-            ? @"Будет открыто окно OAuth Яндекса"
-            : @"Используйте «+» → «Импортировать файл» в библиотеке";
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
         return cell;
     }
@@ -129,6 +150,8 @@
     if (![ORYandexAuth shared].isSignedIn) {
         if (indexPath.row == 0) {
             [self signIn];
+        } else if (indexPath.row == 1) {
+            [self signInWithSafari];
         } else {
             [self.navigationController popViewControllerAnimated:YES];
         }
@@ -138,13 +161,32 @@
     [self downloadItem:self.items[(NSUInteger)indexPath.row]];
 }
 
+- (void)signInWithSafari {
+    NSURL *url = [ORYandexAuth authorizationURL];
+    if (!url) {
+        [ORUtil presentAlertIn:self title:@"Нужен Client ID"
+                        message:@"Сначала укажите Client ID приложения OAuth в настройках: Настройки → Яндекс Книги → Client ID OAuth."];
+        return;
+    }
+    [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+}
+
 - (void)signIn {
     __weak typeof(self) weakSelf = self;
     [[ORYandexAuth shared] signInFrom:self completion:^(BOOL success, NSError *error) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         if (!success) {
-            if (error) [ORUtil presentAlertIn:strongSelf title:@"Яндекс Книги" message:error.localizedDescription];
+            if (error) {
+                UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Яндекс Книги"
+                                                                              message:error.localizedDescription
+                                                                       preferredStyle:UIAlertControllerStyleAlert];
+                [alert addAction:[UIAlertAction actionWithTitle:@"Войти через Safari" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                    [strongSelf signInWithSafari];
+                }]];
+                [alert addAction:[UIAlertAction actionWithTitle:@"Закрыть" style:UIAlertActionStyleCancel handler:nil]];
+                [strongSelf presentViewController:alert animated:YES completion:nil];
+            }
             return;
         }
         [strongSelf.tableView reloadData];

@@ -5,6 +5,11 @@
 #import "ORUtil.h"
 #import "ORXML.h"
 
+@interface OROPDS ()
++ (BOOL)isDownloadableType:(NSString *)type;
++ (NSString *)absoluteURL:(NSString *)href base:(NSString *)base;
+@end
+
 @implementation OROPDS
 
 + (NSDictionary *)headersForCatalog:(NSDictionary *)catalog {
@@ -93,11 +98,19 @@
         BOOL navigation = NO;
         BOOL acquisition = NO;
         for (NSDictionary *link in entryLinks) {
-            NSString *rel = link[@"rel"];
-            if ([rel isEqualToString:@"subsection"] || [rel containsString:@"navigation"]) navigation = YES;
-            if ([rel hasPrefix:@"http://opds-spec.org/acquisition"] ||
-                [rel isEqualToString:@"http://opds-spec.org/acquisition"] ||
-                [rel isEqualToString:@"enclosure"]) acquisition = YES;
+            NSString *rel = link[@"rel"] ?: @"";
+            NSString *type = link[@"type"] ?: @"";
+            NSString *lowerRel = rel.lowercaseString;
+            if ([lowerRel containsString:@"subsection"] || [lowerRel containsString:@"navigation"]) {
+                navigation = YES;
+            }
+            // Some catalogs use the short "acquisition" rel, some use the full
+            // opds-spec URI, and some only advertise the MIME type.
+            if ([lowerRel containsString:@"acquisition"] || [lowerRel isEqualToString:@"enclosure"]) {
+                acquisition = YES;
+            } else if ([self isDownloadableType:type]) {
+                acquisition = YES;
+            }
         }
         entry[@"navigation"] = @(navigation);
         entry[@"acquisition"] = @(acquisition);
@@ -108,8 +121,28 @@
     return feed;
 }
 
++ (BOOL)isDownloadableType:(NSString *)type {
+    if (type.length == 0) return NO;
+    NSString *lower = type.lowercaseString;
+    NSArray<NSString *> *needles = @[@"epub", @"fb2", @"pdf", @"text/plain", @"mobi", @"azw",
+                                     @"djvu", @"zip", @"cbz", @"cbr", @"audio", @"mpeg",
+                                     @"m4b", @"m4a", @"flac", @"ogg", @"octet-stream"];
+    for (NSString *needle in needles) {
+        if ([lower containsString:needle]) return YES;
+    }
+    return NO;
+}
+
 + (NSString *)absoluteURL:(NSString *)href base:(NSString *)base {
     if ([href hasPrefix:@"http://"] || [href hasPrefix:@"https://"]) return href;
+    // Feeds live at /opds (no extension) — treat them as directories so
+    // relative hrefs like "b/123/download" resolve under /opds/, not /.
+    if (![base hasSuffix:@"/"]) {
+        NSURL *baseURL = [NSURL URLWithString:base];
+        if (baseURL.path.pathExtension.length == 0) {
+            base = [base stringByAppendingString:@"/"];
+        }
+    }
     NSURL *baseURL = [NSURL URLWithString:base];
     if (!baseURL) return href;
     NSURL *resolved = [NSURL URLWithString:href relativeToURL:baseURL];
@@ -121,50 +154,84 @@
            formatHint:(NSString *)formatHint
            completion:(OROPDSDownloadCompletion)completion {
     if (!completion) return;
+    NSArray<NSDictionary *> *links = entry[@"links"] ?: @[];
+
     NSDictionary *chosen = nil;
-    for (NSDictionary *link in entry[@"links"] ?: @[]) {
+    // 1. Prefer a real acquisition link with a known book/audio type.
+    for (NSDictionary *link in links) {
         NSString *type = link[@"type"] ?: @"";
-        NSString *rel = link[@"rel"] ?: @"";
-        if (!([rel hasPrefix:@"http://opds-spec.org/acquisition"] || [rel isEqualToString:@"enclosure"])) continue;
-        if ([type containsString:@"epub"] || [type containsString:@"pdf"] ||
-            [type containsString:@"text/plain"] || [type containsString:@"fb2"] ||
-            [type containsString:@"audio"] || [type containsString:@"mpeg"] ||
-            [type containsString:@"zip"]) {
-            chosen = link;
-            if ([type containsString:@"epub"]) break;
-        }
+        NSString *rel = (link[@"rel"] ?: @"").lowercaseString;
+        BOOL isAcquisition = [rel containsString:@"acquisition"] || [rel isEqualToString:@"enclosure"];
+        if (!isAcquisition) continue;
+        if (![self isDownloadableType:type]) continue;
+        chosen = link;
+        if ([type.lowercaseString containsString:@"epub"]) break;
     }
+    // 2. Any link with a downloadable MIME type (catalogs with non-standard rel).
     if (!chosen) {
-        for (NSDictionary *link in entry[@"links"] ?: @[]) {
-            NSString *rel = link[@"rel"] ?: @"";
-            if ([rel hasPrefix:@"http://opds-spec.org/acquisition"] || [rel isEqualToString:@"enclosure"]) {
+        for (NSDictionary *link in links) {
+            NSString *type = link[@"type"] ?: @"";
+            if ([self isDownloadableType:type]) {
                 chosen = link;
                 break;
             }
         }
     }
+    // 3. Last resort: a link whose URL clearly points at a book file.
     if (!chosen) {
+        NSArray<NSString *> *known = @[@"epub", @"fb2", @"pdf", @"txt", @"zip", @"cbz", @"cbr",
+                                       @"mobi", @"azw", @"azw3", @"djvu", @"mp3", @"m4b", @"m4a", @"flac", @"ogg"];
+        for (NSDictionary *link in links) {
+            NSString *href = link[@"href"] ?: @"";
+            NSString *extension = [NSURL URLWithString:href].path.pathExtension.lowercaseString;
+            if ([known containsObject:extension]) {
+                chosen = link;
+                break;
+            }
+        }
+    }
+
+    if (!chosen) {
+        // Log what the entry actually offers: this makes adapting to a changed
+        // catalog trivial without recompiling angle brackets.
+        NSMutableArray<NSString *> *debug = [NSMutableArray array];
+        for (NSDictionary *link in links) {
+            [debug addObject:[NSString stringWithFormat:@"rel=%@ type=%@ href=%@",
+                              link[@"rel"] ?: @"", link[@"type"] ?: @"", link[@"href"] ?: @""]];
+        }
+        NSLog(@"[OmniReader] OPDS entry '%@' has no downloadable link. Links: %@",
+              entry[@"title"] ?: @"?", [debug componentsJoinedByString:@" | "]);
         completion(nil, nil, [NSError errorWithDomain:@"OmniReader.OPDS" code:3
-                                            userInfo:@{NSLocalizedDescriptionKey: @"У записи нет файла для скачивания"}]);
+                                            userInfo:@{NSLocalizedDescriptionKey:
+                                                           @"У записи нет файла для скачивания. Возможно, это раздел каталога — откройте его, либо каталог не отдаёт файлы без авторизации."}]);
         return;
     }
 
-    NSString *href = chosen[@"href"];
-    NSString *type = chosen[@"type"] ?: @"";
+    NSString *href = chosen[@"href"] ?: @"";
+    NSString *type = (chosen[@"type"] ?: @"").lowercaseString;
     NSString *extension = @"epub";
     if ([type containsString:@"pdf"]) extension = @"pdf";
     else if ([type containsString:@"text/plain"]) extension = @"txt";
     else if ([type containsString:@"fb2"]) extension = @"fb2";
-    else if ([type containsString:@"audio/mpeg"] || [type containsString:@"audio/mp4"]) extension = @"mp3";
+    else if ([type containsString:@"mobi"]) extension = @"mobi";
+    else if ([type containsString:@"azw"]) extension = @"azw3";
+    else if ([type containsString:@"djvu"]) extension = @"djvu";
+    else if ([type containsString:@"cbz"]) extension = @"cbz";
+    else if ([type containsString:@"cbr"]) extension = @"cbr";
+    else if ([type containsString:@"audio/mpeg"] || [type containsString:@"mpeg"]) extension = @"mp3";
+    else if ([type containsString:@"audio/mp4"] || [type containsString:@"m4b"]) extension = @"m4b";
+    else if ([type containsString:@"flac"]) extension = @"flac";
+    else if ([type containsString:@"ogg"]) extension = @"ogg";
     else if ([type containsString:@"zip"]) extension = @"zip";
 
-    // Prefer the extension advertised by the server in the URL.
-    NSString *pathExtension = [href pathExtension].lowercaseString;
-    NSArray<NSString *> *known = @[@"epub", @"fb2", @"pdf", @"txt", @"zip", @"cbz", @"mobi", @"azw3", @"mp3", @"m4b", @"m4a"];
+    // The URL extension is the most reliable hint when the MIME type is generic.
+    NSString *pathExtension = [NSURL URLWithString:href].path.pathExtension.lowercaseString;
+    NSArray<NSString *> *known = @[@"epub", @"fb2", @"pdf", @"txt", @"zip", @"cbz", @"cbr",
+                                   @"mobi", @"azw", @"azw3", @"djvu", @"mp3", @"m4b", @"m4a", @"flac", @"ogg"];
     if ([known containsObject:pathExtension]) {
-        extension = ([pathExtension isEqualToString:@"fb2"] && formatHint.length > 0) ? formatHint : pathExtension;
+        extension = pathExtension;
     }
-    if (formatHint.length > 0 && formatHint.length < 6) extension = formatHint;
+    if (formatHint.length > 0 && formatHint.length <= 5) extension = formatHint;
 
     NSString *destination = [[ORPaths cacheDirectory] stringByAppendingPathComponent:
                                 [NSString stringWithFormat:@"opds-%@.%@", [ORUtil uniqueKey], extension]];
