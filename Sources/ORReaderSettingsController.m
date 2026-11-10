@@ -4,6 +4,7 @@
     ORSettings *_settings;
     UISegmentedControl *_themeControl;
     UISegmentedControl *_fontControl;
+    UISegmentedControl *_directionControl;
     UISlider *_sizeSlider;
     UISlider *_lineHeightSlider;
     UISlider *_marginSlider;
@@ -37,6 +38,9 @@
     _fontControl = [[UISegmentedControl alloc] initWithItems:@[@"С засечками", @"Без засечек", @"Моно"]];
     [_fontControl addTarget:self action:@selector(controlChanged) forControlEvents:UIControlEventValueChanged];
 
+    _directionControl = [[UISegmentedControl alloc] initWithItems:@[@"Вбок", @"Вниз"]];
+    [_directionControl addTarget:self action:@selector(controlChanged) forControlEvents:UIControlEventValueChanged];
+
     _sizeSlider = [self sliderWithMin:14 max:30 step:1 action:@selector(controlChanged)];
     _lineHeightSlider = [self sliderWithMin:1.1 max:2.0 step:0.05 action:@selector(controlChanged)];
     _marginSlider = [self sliderWithMin:10 max:40 step:1 action:@selector(controlChanged)];
@@ -63,6 +67,7 @@
 - (void)reloadUI {
     _themeControl.selectedSegmentIndex = _settings.theme;
     _fontControl.selectedSegmentIndex = _settings.font;
+    _directionControl.selectedSegmentIndex = _settings.pageDirection;
     _sizeSlider.value = _settings.fontSize;
     _lineHeightSlider.value = _settings.lineHeight;
     _marginSlider.value = _settings.margin;
@@ -74,6 +79,7 @@
 - (void)controlChanged {
     _settings.theme = _themeControl.selectedSegmentIndex;
     _settings.font = _fontControl.selectedSegmentIndex;
+    _settings.pageDirection = _directionControl.selectedSegmentIndex;
     _settings.fontSize = lroundf(_sizeSlider.value);
     _settings.lineHeight = _lineHeightSlider.value;
     _settings.margin = lroundf(_marginSlider.value);
@@ -100,7 +106,7 @@
     switch (section) {
         case 0: return 1;
         case 1: return 2;
-        case 2: return 3;
+        case 2: return 4;
         default: return 3;
     }
 }
@@ -145,9 +151,12 @@
             cell.textLabel.text = @"Отступы";
             cell.accessoryView = _marginSlider;
             [self addValueLabel:cell forValue:[NSString stringWithFormat:@"%ld px", (long)_settings.margin]];
-        } else {
+        } else if (indexPath.row == 2) {
             cell.textLabel.text = @"Выравнивание";
             cell.accessoryView = _justifySwitch;
+        } else {
+            cell.textLabel.text = @"Перелистывание";
+            cell.accessoryView = _directionControl;
         }
     } else {
         if (indexPath.row == 0) {

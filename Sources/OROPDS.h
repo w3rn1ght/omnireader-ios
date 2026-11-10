@@ -17,6 +17,12 @@ typedef void (^OROPDSDownloadCompletion)(NSString *_Nullable path, NSString *_Nu
            formatHint:(nullable NSString *)formatHint
            completion:(OROPDSDownloadCompletion)completion;
 
+/// Resolves an OpenSearch template from the feed (or falls back to ?q=).
++ (void)resolveSearchURLForFeed:(NSDictionary *)feed
+                        catalog:(nullable NSDictionary *)catalog
+                          query:(NSString *)query
+                     completion:(void (^)(NSString *_Nullable url, NSError *_Nullable error))completion;
+
 @end
 
 NS_ASSUME_NONNULL_END

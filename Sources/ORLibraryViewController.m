@@ -501,6 +501,16 @@ static NSString *const ORLibrarySortKey = @"or.librarySort";
             share.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width / 2, self.view.bounds.size.height / 2, 1, 1);
             [self presentViewController:share animated:YES completion:nil];
         }]];
+        [sheet addAction:[UIAlertAction actionWithTitle:@"Обновить обложку" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            NSString *path = [ORPaths pathForBook:book];
+            if (path.length == 0) return;
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                [ORMetadata enrichBook:book atPath:path];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [[ORLibrary shared] updateBook:book];
+                });
+            });
+        }]];
     }
     [sheet addAction:[UIAlertAction actionWithTitle:@"Удалить" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Удалить книгу?"

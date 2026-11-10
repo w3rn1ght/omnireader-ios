@@ -5,13 +5,19 @@
 #import "ORSettingsViewController.h"
 #import "ORUtil.h"
 
-@interface OROPDSViewController ()
+@interface OROPDSViewController () <UISearchResultsUpdating>
 @property (nonatomic, copy) NSString *feedURL;
 @property (nonatomic, copy) NSString *feedTitle;
 @property (nonatomic, strong, nullable) NSDictionary *catalog;
 @property (nonatomic, strong) NSArray<NSDictionary *> *entries;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic) BOOL loading;
+@property (nonatomic, strong) UISearchController *searchController;
+@property (nonatomic, strong, nullable) NSDictionary *lastFeed;
+@property (nonatomic, copy) NSString *baseFeedURL;
+@property (nonatomic, strong, nullable) NSDictionary *searchBaseFeed;
+@property (nonatomic) BOOL searching;
+@property (nonatomic, strong, nullable) NSTimer *searchTimer;
 @end
 
 @implementation OROPDSViewController
@@ -78,19 +84,34 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.tableView.rowHeight = 68;
+    self.baseFeedURL = self.feedURL;
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.spinner];
     self.tableView.refreshControl = [[UIRefreshControl alloc] init];
     [self.tableView.refreshControl addTarget:self action:@selector(loadFeed) forControlEvents:UIControlEventValueChanged];
+
+    self.searchController = [[UISearchController alloc] initWithSearchResultsController:nil];
+    self.searchController.searchResultsUpdater = self;
+    self.searchController.obscuresBackgroundDuringPresentation = NO;
+    self.searchController.searchBar.placeholder = @"Поиск в каталоге";
+    self.navigationItem.searchController = self.searchController;
+    self.navigationItem.hidesSearchBarWhenScrolling = NO;
+    self.definesPresentationContext = YES;
+
     [self loadFeed];
 }
 
 - (void)loadFeed {
+    [self loadFeedURL:self.baseFeedURL searchQuery:nil];
+}
+
+- (void)loadFeedURL:(NSString *)url searchQuery:(NSString *)query {
     if (self.loading) return;
     self.loading = YES;
+    self.searching = query.length > 0;
     [self.spinner startAnimating];
     __weak typeof(self) weakSelf = self;
-    [OROPDS loadFeedAtURL:self.feedURL catalog:self.catalog completion:^(NSDictionary *feed, NSError *error) {
+    [OROPDS loadFeedAtURL:url catalog:self.catalog completion:^(NSDictionary *feed, NSError *error) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf.loading = NO;
@@ -100,9 +121,54 @@
             [ORUtil presentAlertIn:strongSelf title:@"OPDS" message:error.localizedDescription ?: @"Не удалось загрузить каталог."];
             return;
         }
-        strongSelf.title = feed[@"title"] ?: strongSelf.feedTitle;
+        strongSelf.lastFeed = feed;
+        NSString *feedName = feed[@"title"] ?: strongSelf.feedTitle;
+        strongSelf.title = query.length > 0
+            ? [NSString stringWithFormat:@"Поиск: %@", query]
+            : feedName;
         strongSelf.entries = feed[@"entries"] ?: @[];
         [strongSelf.tableView reloadData];
+    }];
+}
+
+- (void)updateSearchResultsForSearchController:(UISearchController *)searchController {
+    [self.searchTimer invalidate];
+    NSString *query = searchController.searchBar.text ?: @"";
+    self.searchTimer = [NSTimer scheduledTimerWithTimeInterval:0.6
+                                                        target:self
+                                                      selector:@selector(searchTimerFired:)
+                                                      userInfo:query
+                                                       repeats:NO];
+}
+
+- (void)searchTimerFired:(NSTimer *)timer {
+    [self performSearch:(NSString *)(timer.userInfo ?: @"")];
+}
+
+- (void)performSearch:(NSString *)query {
+    if (query.length == 0) {
+        self.searchBaseFeed = nil;
+        [self loadFeedURL:self.baseFeedURL searchQuery:nil];
+        return;
+    }
+    if (!self.searchBaseFeed) self.searchBaseFeed = self.lastFeed;
+    if (!self.searchBaseFeed) {
+        [self loadFeedURL:self.baseFeedURL searchQuery:query];
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    [OROPDS resolveSearchURLForFeed:self.searchBaseFeed
+                            catalog:self.catalog
+                              query:query
+                         completion:^(NSString *url, NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (!url) {
+            [ORUtil presentAlertIn:strongSelf title:@"Поиск"
+                            message:error.localizedDescription ?: @"Каталог не поддерживает поиск."];
+            return;
+        }
+        [strongSelf loadFeedURL:url searchQuery:query];
     }];
 }
 

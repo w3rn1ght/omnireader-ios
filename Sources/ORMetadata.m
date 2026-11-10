@@ -6,6 +6,13 @@
 #import "ORZip.h"
 #import <PDFKit/PDFKit.h>
 
+@interface ORMetadata ()
++ (UIImage *)coverImageFromZip:(ORZip *)zip
+                          href:(NSString *)href
+                          base:(NSString *)base
+                         depth:(NSInteger)depth;
+@end
+
 @implementation ORMetadata
 
 + (void)enrichBook:(ORBook *)book atPath:(NSString *)path {
@@ -123,6 +130,21 @@
     if (authors.count > 0) result[@"author"] = [authors componentsJoinedByString:@", "];
 
     NSString *opfDir = opfPath.stringByDeletingLastPathComponent;
+    if ([opfDir isEqualToString:opfPath]) opfDir = @"";
+
+    NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
+    ORXMLNode *manifest = [package firstChildNamed:@"manifest"];
+    for (ORXMLNode *item in [manifest childrenNamed:@"item"]) {
+        NSString *href = [item attr:@"href"];
+        if (href.length == 0) continue;
+        [items addObject:@{
+            @"id": [item attr:@"id"] ?: @"",
+            @"href": href,
+            @"type": [[item attr:@"media-type"] lowercaseString] ?: @"",
+            @"properties": [[item attr:@"properties"] lowercaseString] ?: @""
+        }];
+    }
+
     NSString *coverID = nil;
     for (ORXMLNode *meta in [metadata childrenNamed:@"meta"]) {
         if ([[[meta attr:@"name"] lowercaseString] isEqualToString:@"cover"]) {
@@ -130,17 +152,27 @@
             break;
         }
     }
-    ORXMLNode *manifest = [package firstChildNamed:@"manifest"];
+
     NSString *coverHref = nil;
-    for (ORXMLNode *item in [manifest childrenNamed:@"item"]) {
-        NSString *itemID = [item attr:@"id"];
-        NSString *properties = [[item attr:@"properties"] lowercaseString];
-        if (coverID && [itemID isEqualToString:coverID]) {
-            coverHref = [item attr:@"href"];
+    for (NSDictionary *item in items) {
+        if (coverID && [item[@"id"] isEqualToString:coverID]) {
+            coverHref = item[@"href"];
             break;
         }
-        if (!coverHref && [properties containsString:@"cover-image"]) {
-            coverHref = [item attr:@"href"];
+        if ([item[@"properties"] containsString:@"cover-image"]) {
+            coverHref = item[@"href"];
+            break;
+        }
+    }
+    if (!coverHref) {
+        for (NSDictionary *item in items) {
+            NSString *identifier = [item[@"id"] lowercaseString];
+            NSString *href = [item[@"href"] lowercaseString];
+            if (([identifier containsString:@"cover"] || [href containsString:@"cover"]) &&
+                [item[@"type"] hasPrefix:@"image/"]) {
+                coverHref = item[@"href"];
+                break;
+            }
         }
     }
     if (!coverHref) {
@@ -152,14 +184,54 @@
             }
         }
     }
-    if (coverHref.length > 0) {
-        NSString *resolved = [self resolve:coverHref relativeTo:opfDir];
-        NSData *coverData = [zip dataForEntry:resolved error:NULL];
-        if (!coverData) coverData = [zip dataForEntry:coverHref error:NULL];
-        UIImage *image = coverData ? [UIImage imageWithData:coverData] : nil;
-        if (image) result[@"cover"] = image;
+
+    UIImage *cover = [self coverImageFromZip:zip href:coverHref base:opfDir depth:0];
+    if (!cover) {
+        // Many EPUBs declare an XHTML cover page or omit the cover metadata.
+        // Pick the largest image in the manifest as a last resort.
+        CGFloat bestArea = 0;
+        NSUInteger inspected = 0;
+        for (NSDictionary *item in items) {
+            if (![item[@"type"] hasPrefix:@"image/"]) continue;
+            if (inspected++ > 40) break;
+            UIImage *candidate = [self coverImageFromZip:zip href:item[@"href"] base:opfDir depth:1];
+            if (!candidate) continue;
+            CGFloat area = candidate.size.width * candidate.size.height *
+                           candidate.scale * candidate.scale;
+            if (area > bestArea) {
+                bestArea = area;
+                cover = candidate;
+            }
+        }
     }
+    if (cover) result[@"cover"] = cover;
     return result;
+}
+
++ (UIImage *)coverImageFromZip:(ORZip *)zip href:(NSString *)href base:(NSString *)base depth:(NSInteger)depth {
+    if (href.length == 0 || depth > 2) return nil;
+    NSString *resolved = [self resolve:href relativeTo:base];
+    NSData *data = [zip dataForEntry:resolved error:NULL];
+    if (!data) data = [zip dataForEntry:href error:NULL];
+    if (!data) return nil;
+
+    UIImage *image = [UIImage imageWithData:data];
+    if (image) return image;
+
+    // XHTML/SVG cover pages: follow the first embedded image reference.
+    NSString *text = [ORText stringFromData:data];
+    if (text.length == 0) return nil;
+    NSString *src = [ORText firstMatchPattern:@"(?i)<img[^>]+src\\s*=\\s*[\"']([^\"']+)[\"']"
+                                     inString:text
+                                        group:1];
+    if (src.length == 0) {
+        src = [ORText firstMatchPattern:@"(?i)(?:xlink:)?href\\s*=\\s*[\"']([^\"'#]+\\.[a-zA-Z0-9]+)[\"']"
+                               inString:text
+                                  group:1];
+    }
+    if (src.length == 0) return nil;
+    NSString *directory = resolved.stringByDeletingLastPathComponent;
+    return [self coverImageFromZip:zip href:src base:directory depth:depth + 1];
 }
 
 + (NSString *)resolve:(NSString *)href relativeTo:(NSString *)base {

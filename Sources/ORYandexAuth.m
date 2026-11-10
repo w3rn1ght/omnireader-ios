@@ -35,11 +35,30 @@ NSNotificationName const ORYandexAuthDidChangeNotification = @"ORYandexAuthDidCh
 }
 
 - (void)setManualToken:(NSString *)token {
+    [self setManualToken:token completion:nil];
+}
+
+- (void)setManualToken:(NSString *)token
+            completion:(void (^)(BOOL, NSString *))completion {
     NSString *normalized = [ORYandexAuth tokenFromPastedString:token];
-    if (normalized.length == 0) return;
+    if (normalized.length < 8) {
+        if (completion) completion(NO, @"Не удалось найти access_token. Вставьте токен или всю callback-ссылку.");
+        return;
+    }
     [ORSettings shared].yandexToken = normalized;
-    [self refreshProfile];
     [[NSNotificationCenter defaultCenter] postNotificationName:ORYandexAuthDidChangeNotification object:self];
+    [ORYandexAPI fetchProfile:^(NSString *name, NSError *error) {
+        [ORUtil runOnMain:^{
+            if (name.length > 0) {
+                [ORSettings shared].yandexUserName = name;
+                if (completion) completion(YES, [NSString stringWithFormat:@"Вы вошли как %@", name]);
+            } else if (error) {
+                if (completion) completion(YES, @"Токен сохранён, но Яндекс не подтвердил его. Проверьте сеть и права приложения OAuth.");
+            } else {
+                if (completion) completion(YES, @"Токен сохранён.");
+            }
+        }];
+    }];
 }
 
 + (NSString *)tokenFromPastedString:(NSString *)string {
@@ -159,17 +178,15 @@ NSNotificationName const ORYandexAuthDidChangeNotification = @"ORYandexAuthDidCh
     }];
     [alert addAction:[UIAlertAction actionWithTitle:@"Сохранить" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         NSString *pasted = alert.textFields.firstObject.text ?: @"";
-        NSString *token = [ORYandexAuth tokenFromPastedString:pasted];
-        if (token.length < 8) {
-            completion(NO, [NSError errorWithDomain:@"OmniReader.Yandex" code:5
-                                           userInfo:@{NSLocalizedDescriptionKey:
-                                                          @"Не удалось найти access_token. Скопируйте адрес целиком, включая #access_token=…"}]);
-            return;
-        }
-        [ORSettings shared].yandexToken = token;
-        [self refreshProfile];
-        [[NSNotificationCenter defaultCenter] postNotificationName:ORYandexAuthDidChangeNotification object:self];
-        completion(YES, nil);
+        [[ORYandexAuth shared] setManualToken:pasted completion:^(BOOL success, NSString *message) {
+            if (success) {
+                completion(YES, nil);
+            } else {
+                completion(NO, [NSError errorWithDomain:@"OmniReader.Yandex" code:5
+                                               userInfo:@{NSLocalizedDescriptionKey:
+                                                              message ?: @"Токен не распознан"}]); 
+            }
+        }];
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Отмена" style:UIAlertActionStyleCancel handler:nil]];
     [host presentViewController:alert animated:YES completion:nil];

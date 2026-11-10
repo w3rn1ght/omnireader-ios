@@ -8,6 +8,8 @@
 @interface OROPDS ()
 + (BOOL)isDownloadableType:(NSString *)type;
 + (NSString *)absoluteURL:(NSString *)href base:(NSString *)base;
++ (NSString *)queryURLForBase:(NSString *)base query:(NSString *)query;
++ (NSString *)fillSearchTemplate:(NSString *)template query:(NSString *)query;
 @end
 
 @implementation OROPDS
@@ -253,6 +255,68 @@
         NSString *suggested = [NSString stringWithFormat:@"%@.%@", base, extension];
         completion(path, suggested, nil);
     }];
+}
+
++ (void)resolveSearchURLForFeed:(NSDictionary *)feed
+                        catalog:(NSDictionary *)catalog
+                          query:(NSString *)query
+                     completion:(void (^)(NSString *, NSError *))completion {
+    if (!completion) return;
+    NSString *base = feed[@"baseURL"] ?: @"";
+    NSString *searchHref = nil;
+    for (NSDictionary *link in feed[@"links"] ?: @[]) {
+        NSString *rel = [(NSString *)(link[@"rel"] ?: @"") lowercaseString];
+        NSString *type = [(NSString *)(link[@"type"] ?: @"") lowercaseString];
+        if ([rel containsString:@"search"] || [type containsString:@"opensearchdescription"]) {
+            searchHref = (NSString *)(link[@"href"] ?: @"");
+            break;
+        }
+    }
+    if (searchHref.length == 0) {
+        completion([self queryURLForBase:base query:query], nil);
+        return;
+    }
+    searchHref = [self absoluteURL:searchHref base:base];
+    [ORHTTP GET:searchHref
+        headers:[self headersForCatalog:catalog]
+     completion:^(NSData *data, NSHTTPURLResponse *response, NSError *error) {
+        ORXMLNode *root = data ? [ORXML parseData:data error:NULL] : nil;
+        NSString *template = nil;
+        if (root) {
+            for (ORXMLNode *node in [root childrenNamed:@"url"]) {
+                NSString *type = [[node attr:@"type"] lowercaseString];
+                NSString *candidate = [node attr:@"template"];
+                if (candidate.length == 0) continue;
+                if ([type containsString:@"atom"]) { template = candidate; break; }
+                if (!template) template = candidate;
+            }
+            if (!template) {
+                template = [[[root descendantsNamed:@"url"] firstObject] attr:@"template"];
+            }
+        }
+        if (template.length == 0) {
+            completion([self queryURLForBase:base query:query], nil);
+            return;
+        }
+        NSString *filled = [self fillSearchTemplate:template query:query];
+        completion([self absoluteURL:filled base:base], nil);
+    }];
+}
+
++ (NSString *)queryURLForBase:(NSString *)base query:(NSString *)query {
+    NSString *escaped = [ORText queryEscape:query];
+    NSString *separator = [base containsString:@"?"] ? @"&" : @"?";
+    return [base stringByAppendingFormat:@"%@q=%@", separator, escaped];
+}
+
++ (NSString *)fillSearchTemplate:(NSString *)template query:(NSString *)query {
+    NSString *escaped = [ORText queryEscape:query];
+    NSString *result = template;
+    result = [result stringByReplacingOccurrencesOfString:@"{searchTerms}" withString:escaped];
+    result = [result stringByReplacingOccurrencesOfString:@"{startIndex}" withString:@"1"];
+    result = [result stringByReplacingOccurrencesOfString:@"{count}" withString:@"25"];
+    result = [ORText replacePattern:@"\\{[^}]+\\}" inString:result withTemplate:@""];
+    return result;
 }
 
 @end

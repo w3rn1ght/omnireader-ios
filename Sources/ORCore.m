@@ -22,6 +22,7 @@ static NSString *const ORBundlePreferencesPrefix = @"or.";
         _addedAt = [NSDate date];
         _progress = 0.0;
         _collections = @[];
+        _bookmarks = @[];
     }
     return self;
 }
@@ -47,6 +48,9 @@ static NSString *const ORBundlePreferencesPrefix = @"or.";
     if ([dictionary[@"collections"] isKindOfClass:[NSArray class]]) {
         _collections = dictionary[@"collections"];
     }
+    if ([dictionary[@"bookmarks"] isKindOfClass:[NSArray class]]) {
+        _bookmarks = dictionary[@"bookmarks"];
+    }
     if (_title.length == 0) _title = @"Без названия";
     return self;
 }
@@ -62,6 +66,7 @@ static NSString *const ORBundlePreferencesPrefix = @"or.";
     dict[@"addedAt"] = @([self.addedAt timeIntervalSince1970]);
     dict[@"progress"] = @(self.progress);
     dict[@"collections"] = self.collections ?: @[];
+    dict[@"bookmarks"] = self.bookmarks ?: @[];
     if (self.coverName) dict[@"coverName"] = self.coverName;
     if (self.remoteID) dict[@"remoteID"] = self.remoteID;
     if (self.audioURL) dict[@"audioURL"] = self.audioURL;
@@ -435,6 +440,7 @@ static NSString *const ORBundlePreferencesPrefix = @"or.";
     if ([data writeToFile:path atomically:YES]) {
         book.coverName = name;
         [self scheduleSave];
+        [self notifyChange];
     }
 }
 
@@ -465,6 +471,7 @@ static NSString *const ORBundlePreferencesPrefix = @"or.";
             @"or.justify": @YES,
             @"or.hyphenate": @YES,
             @"or.animatePages": @YES,
+            @"or.pageDirection": @(ORPageDirectionHorizontal),
             @"or.speechRate": @0.5,
             @"or.playbackRate": @1.0,
             @"or.keepScreenAwake": @YES,
@@ -497,6 +504,8 @@ static NSString *const ORBundlePreferencesPrefix = @"or.";
 - (void)setHyphenate:(BOOL)value { [self.defaults setBool:value forKey:@"or.hyphenate"]; }
 - (BOOL)animatePages { return [self.defaults boolForKey:@"or.animatePages"]; }
 - (void)setAnimatePages:(BOOL)value { [self.defaults setBool:value forKey:@"or.animatePages"]; }
+- (ORPageDirection)pageDirection { return (ORPageDirection)[self.defaults integerForKey:@"or.pageDirection"]; }
+- (void)setPageDirection:(ORPageDirection)value { [self.defaults setInteger:value forKey:@"or.pageDirection"]; }
 - (float)speechRate { return [self.defaults floatForKey:@"or.speechRate"]; }
 - (void)setSpeechRate:(float)value { [self.defaults setFloat:value forKey:@"or.speechRate"]; }
 - (float)playbackRate { return [self.defaults floatForKey:@"or.playbackRate"]; }

@@ -81,6 +81,7 @@
                         if (epub.title.length > 0) book.title = epub.title;
                     }
                     if (book.author.length == 0 && epub.author.length > 0) book.author = epub.author;
+                    [self adoptCoverForBook:book fromPath:epub.coverImagePath];
                     controller = [[ORPagedReaderController alloc] initWithBook:book
                                                                           body:epub.htmlBody
                                                                       extraCSS:epub.extraCSS
@@ -94,6 +95,7 @@
                 if (fb2) {
                     if (fb2.title.length > 0) book.title = fb2.title;
                     if (fb2.author.length > 0) book.author = fb2.author;
+                    [self adoptCoverForBook:book fromPath:fb2.coverImagePath];
                     controller = [[ORPagedReaderController alloc] initWithBook:book
                                                                           body:fb2.htmlBody
                                                                       extraCSS:fb2.extraCSS
@@ -162,6 +164,15 @@
 + (NSError *)missingFileError {
     return [NSError errorWithDomain:@"OmniReader.Reader" code:3
                            userInfo:@{NSLocalizedDescriptionKey: @"Файл книги не найден в библиотеке."}];
+}
+
++ (void)adoptCoverForBook:(ORBook *)book fromPath:(NSString *)path {
+    if (!book || book.coverName.length > 0 || path.length == 0) return;
+    UIImage *image = [UIImage imageWithContentsOfFile:path];
+    if (!image) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[ORLibrary shared] setCoverImage:image forBook:book];
+    });
 }
 
 @end

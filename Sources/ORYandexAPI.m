@@ -3,6 +3,13 @@
 #import "ORHTTP.h"
 #import "ORText.h"
 
+@interface ORYandexAPI ()
++ (void)fetchLoginProfile:(ORYandexProfileCompletion)completion;
++ (void)performGET:(NSString *)path completion:(void (^)(id _Nullable json, NSError *_Nullable error))completion;
++ (NSDictionary *)dictionaryFromJSON:(id)json;
++ (NSString *)firstStringIn:(NSDictionary *)dictionary keys:(NSArray<NSString *> *)keys;
+@end
+
 @implementation ORYandexAPI
 
 #pragma mark - Endpoints
@@ -68,16 +75,42 @@
 
 + (void)fetchProfile:(ORYandexProfileCompletion)completion {
     [self performGET:[self profilePath] completion:^(id json, NSError *error) {
-        if (error) {
-            completion(nil, error);
-            return;
-        }
         NSDictionary *dictionary = [self dictionaryFromJSON:json];
         NSString *name = [self firstStringIn:dictionary keys:@[@"display_name", @"displayName", @"name", @"login", @"email"]];
-        if (name.length == 0) {
+        if (name.length == 0 && !error) {
             NSDictionary *user = [dictionary[@"user"] isKindOfClass:[NSDictionary class]] ? dictionary[@"user"] : nil;
             name = [self firstStringIn:user keys:@[@"display_name", @"name", @"login", @"email"]];
         }
+        if (name.length > 0) {
+            completion(name, nil);
+            return;
+        }
+        // Books API may be unofficial or unavailable; login.yandex.ru is stable
+        // and works with the same OAuth token (login:info scope).
+        [self fetchLoginProfile:completion];
+    }];
+}
+
++ (void)fetchLoginProfile:(ORYandexProfileCompletion)completion {
+    NSString *token = [ORSettings shared].yandexToken;
+    if (token.length == 0) {
+        completion(nil, [NSError errorWithDomain:@"OmniReader.Yandex" code:401
+                                       userInfo:@{NSLocalizedDescriptionKey: @"Токен не задан"}]);
+        return;
+    }
+    NSDictionary *headers = @{@"Authorization": [NSString stringWithFormat:@"OAuth %@", token],
+                              @"Accept": @"application/json"};
+    [ORHTTP GET:@"https://login.yandex.ru/info?format=json"
+        headers:headers
+     completion:^(NSData *data, NSHTTPURLResponse *response, NSError *error) {
+        if (error || data.length == 0) {
+            completion(nil, error ?: [NSError errorWithDomain:@"OmniReader.Yandex" code:401
+                                                    userInfo:@{NSLocalizedDescriptionKey: @"Яндекс не подтвердил токен"}]);
+            return;
+        }
+        id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+        NSDictionary *dictionary = [json isKindOfClass:[NSDictionary class]] ? json : @{};
+        NSString *name = [self firstStringIn:dictionary keys:@[@"display_name", @"real_name", @"login"]];
         completion(name, nil);
     }];
 }

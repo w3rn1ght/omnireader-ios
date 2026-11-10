@@ -47,6 +47,11 @@ typedef NS_ENUM(NSInteger, ORReaderFont) {
     ORReaderFontMono
 };
 
+typedef NS_ENUM(NSInteger, ORPageDirection) {
+    ORPageDirectionHorizontal = 0,
+    ORPageDirectionVertical
+};
+
 #pragma mark - Book
 
 @interface ORBook : NSObject
@@ -64,6 +69,7 @@ typedef NS_ENUM(NSInteger, ORReaderFont) {
 @property (nonatomic, strong, nullable) NSDate *lastOpenedAt;
 @property (nonatomic) double progress;                // 0...1
 @property (nonatomic, copy) NSArray<NSString *> *collections;
+@property (nonatomic, copy) NSArray<NSDictionary *> *bookmarks;
 
 - (instancetype)initWithDictionary:(NSDictionary *)dictionary;
 - (NSDictionary *)dictionaryRepresentation;
@@ -142,6 +148,7 @@ typedef NS_ENUM(NSInteger, ORReaderFont) {
 @property (nonatomic) BOOL justify;
 @property (nonatomic) BOOL hyphenate;
 @property (nonatomic) BOOL animatePages;
+@property (nonatomic) ORPageDirection pageDirection;
 @property (nonatomic) float speechRate;
 @property (nonatomic) float playbackRate;
 @property (nonatomic) BOOL keepScreenAwake;

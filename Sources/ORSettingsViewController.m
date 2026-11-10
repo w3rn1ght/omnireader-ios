@@ -105,7 +105,7 @@
     } else {
         if (indexPath.row == 0) {
             cell.textLabel.text = @"Версия";
-            cell.detailTextLabel.text = @"1.0.2";
+            cell.detailTextLabel.text = @"1.1.0";
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
         } else if (indexPath.row == 1) {
             cell.textLabel.text = @"Поддерживаемые форматы";
@@ -218,9 +218,12 @@
     }];
     [alert addAction:[UIAlertAction actionWithTitle:@"Сохранить" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         NSString *token = alert.textFields.firstObject.text ?: @"";
-        if (token.length < 8) return;
-        [[ORYandexAuth shared] setManualToken:token];
-        [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationAutomatic];
+        [[ORYandexAuth shared] setManualToken:token completion:^(BOOL success, NSString *message) {
+            [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationAutomatic];
+            [ORUtil presentAlertIn:self
+                             title:success ? @"Яндекс Книги" : @"Токен"
+                           message:message ?: (success ? @"Токен сохранён." : @"Не удалось распознать токен.")];
+        }];
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Отмена" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];

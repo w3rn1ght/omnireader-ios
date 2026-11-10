@@ -77,9 +77,9 @@
     [self.view addSubview:self.topBar];
 
     UIButton *back = [UIButton buttonWithType:UIButtonTypeSystem];
-    [back setTitle:@"‹" forState:UIControlStateNormal];
+    [back setTitle:@"Выход" forState:UIControlStateNormal];
     [back setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    back.titleLabel.font = [UIFont systemFontOfSize:32];
+    back.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
     [back addTarget:self action:@selector(goBack) forControlEvents:UIControlEventTouchUpInside];
     back.tag = 1;
     [self.topBar addSubview:back];
@@ -136,8 +136,8 @@
     self.bottomBar.frame = CGRectMake(0, height - self.view.safeAreaInsets.bottom - 86, width,
                                       self.view.safeAreaInsets.bottom + 86);
     UIButton *back = [self.topBar viewWithTag:1];
-    back.frame = CGRectMake(6, self.view.safeAreaInsets.top + 4, 44, 40);
-    self.titleLabel.frame = CGRectMake(52, self.view.safeAreaInsets.top + 10, MAX(80, width - 104), 28);
+    back.frame = CGRectMake(8, self.view.safeAreaInsets.top + 4, 60, 40);
+    self.titleLabel.frame = CGRectMake(70, self.view.safeAreaInsets.top + 10, MAX(80, width - 140), 28);
     self.pageLabel.frame = CGRectMake(18, 6, width - 36, 18);
     CGFloat buttonWidth = (width - 36) / 4.0;
     NSInteger index = 0;

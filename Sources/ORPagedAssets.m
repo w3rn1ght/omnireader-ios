@@ -9,14 +9,15 @@
                           settings:(ORSettings *)settings {
     NSString *template = [self htmlTemplate];
     NSMutableString *html = [template mutableCopy];
-    NSString *css = [self cssForSettings:settings];
-
     NSRange full = NSMakeRange(0, html.length);
-    [html replaceOccurrencesOfString:@"__CSS__" withString:css options:0 range:full];
+    [html replaceOccurrencesOfString:@"__CSS__" withString:[self cssForSettings:settings] options:0 range:full];
     full = NSMakeRange(0, html.length);
     [html replaceOccurrencesOfString:@"__EXTRA__" withString:extraCSS ?: @"" options:0 range:full];
     full = NSMakeRange(0, html.length);
     [html replaceOccurrencesOfString:@"__BODY__" withString:body ?: @"" options:0 range:full];
+    full = NSMakeRange(0, html.length);
+    NSString *mode = settings.pageDirection == ORPageDirectionVertical ? @"mode-vertical" : @"mode-horizontal";
+    [html replaceOccurrencesOfString:@"__MODE__" withString:mode options:0 range:full];
     full = NSMakeRange(0, html.length);
     [html replaceOccurrencesOfString:@"__JS__" withString:[self paginatorScript] options:0 range:full];
     full = NSMakeRange(0, html.length);
@@ -26,7 +27,7 @@
 
 + (NSString *)styleConfigurationForSettings:(ORSettings *)settings {
     return [NSString stringWithFormat:
-        @"{fontSize:%ld, lineHeight:%f, margin:%ld, fontFamily:%@, bg:%@, fg:%@, muted:%@, justify:%@, hyphenate:%@, animate:%@}",
+        @"{fontSize:%ld, lineHeight:%f, margin:%ld, fontFamily:%@, bg:%@, fg:%@, muted:%@, justify:%@, hyphenate:%@, animate:%@, direction:%@}",
         (long)settings.fontSize,
         settings.lineHeight,
         (long)settings.margin,
@@ -36,19 +37,21 @@
         [self jsString:[ORUtil cssColorFromUIColor:[settings themeSecondaryColor]]],
         settings.justify ? @"true" : @"false",
         settings.hyphenate ? @"true" : @"false",
-        settings.animatePages ? @"true" : @"false"];
+        settings.animatePages ? @"true" : @"false",
+        settings.pageDirection == ORPageDirectionVertical ? @"\"vertical\"" : @"\"horizontal\""];
 }
 
 + (NSString *)jsString:(NSString *)value {
     NSMutableString *escaped = [value mutableCopy];
     [escaped replaceOccurrencesOfString:@"\\" withString:@"\\\\" options:0 range:NSMakeRange(0, escaped.length)];
     [escaped replaceOccurrencesOfString:@"\"" withString:@"\\\"" options:0 range:NSMakeRange(0, escaped.length)];
+    [escaped replaceOccurrencesOfString:@"\n" withString:@"\\n" options:0 range:NSMakeRange(0, escaped.length)];
     return [NSString stringWithFormat:@"\"%@\"", escaped];
 }
 
 + (NSString *)cssForSettings:(ORSettings *)settings {
     return [NSString stringWithFormat:
-        @":root{--bg:%@;--fg:%@;--muted:%@;--font-family:%@;--font-size:%ldpx;--line-height:%f;--gutter:%ldpx;--pw:390px;}",
+        @":root{--bg:%@;--fg:%@;--muted:%@;--font-family:%@;--font-size:%ldpx;--line-height:%f;--gutter:%ldpx;}",
         settings.cssBackgroundColor,
         settings.cssTextColor,
         [ORUtil cssColorFromUIColor:[settings themeSecondaryColor]],
@@ -64,29 +67,31 @@
            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover\"/>"
            "<title>__TITLE__</title>"
            "<style>"
-           "html,body{margin:0;padding:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);}"
-           "#viewport{position:fixed;top:0;left:0;right:0;bottom:0;overflow:hidden;background:var(--bg);}"
-           "#content{"
-           "width:calc(var(--pw) - 2 * var(--gutter));"
-           "margin-left:var(--gutter);"
-           "height:100%;box-sizing:border-box;"
-           "padding-top:6px;padding-bottom:6px;"
-           "-webkit-column-width:calc(var(--pw) - 2 * var(--gutter));"
-           "-webkit-column-gap:calc(2 * var(--gutter));"
-           "-webkit-column-fill:auto;"
-           "column-width:calc(var(--pw) - 2 * var(--gutter));"
-           "column-gap:calc(2 * var(--gutter));"
-           "column-fill:auto;"
-           "font-family:var(--font-family);font-size:var(--font-size);line-height:var(--line-height);"
-           "text-rendering:optimizeLegibility;-webkit-text-size-adjust:100%;}"
+           "html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);-webkit-text-size-adjust:100%;}"
+           "body{overflow-x:hidden;font-family:var(--font-family);}"
+           "body.mode-horizontal{height:100%;overflow:hidden;}"
+           "body.mode-vertical{height:auto;min-height:100%;}"
+           "#viewport{position:relative;background:var(--bg);}"
+           "body.mode-horizontal #viewport{position:fixed;top:0;left:0;right:0;bottom:0;overflow:hidden;}"
+           "body.mode-vertical #viewport{position:static;overflow:visible;}"
+           /* Two-column flow: each column is exactly one screen wide, so a
+              horizontal scroll of one viewport shows exactly the next page. */
+           "#content{margin-left:var(--gutter);margin-right:var(--gutter);"
+           "font-size:var(--font-size);line-height:var(--line-height);}"
+           "body.mode-horizontal #content{height:100%;-webkit-column-width:calc(100vw - 2 * var(--gutter));"
+           "-webkit-column-gap:calc(2 * var(--gutter));-webkit-column-fill:auto;"
+           "column-width:calc(100vw - 2 * var(--gutter));column-gap:calc(2 * var(--gutter));column-fill:auto;}"
+           "body.mode-vertical #content{height:auto;}"
            "body.justify #content{text-align:justify;}"
            "body.hyphenate #content{-webkit-hyphens:auto;hyphens:auto;}"
-           "p{margin:0 0 .5em 0;text-indent:1.4em;}"
+           /* Hanging indent: every paragraph starts at the ruler, the first line
+              is pulled into the margin, body text is aligned to the ruler. */
+           "p{margin:0 0 .38em 0;padding-left:1.6em;text-indent:-1.6em;orphans:2;widows:2;}"
            "p:first-child{margin-top:0;}"
-           "h1,h2,h3,h4,h5{text-indent:0;line-height:1.28;margin:1.05em 0 .55em 0;font-weight:600;}"
-           "h1{font-size:1.35em;}h2{font-size:1.18em;}h3{font-size:1.05em;}"
+           "h1,h2,h3,h4,h5,h6{text-indent:0;padding-left:0;line-height:1.3;margin:1.1em 0 .6em 0;font-weight:600;page-break-after:avoid;}"
+           "h1{font-size:1.35em;}h2{font-size:1.18em;}h3{font-size:1.06em;}"
            "hr{margin:1.1em 0;border:none;border-top:1px solid rgba(128,128,128,.35);}"
-           "blockquote{margin:1em .5em;padding:.15em 0 .15em .85em;border-left:3px solid rgba(128,128,128,.3);}"
+           "blockquote{margin:1em .4em;padding:.15em 0 .15em .85em;border-left:3px solid rgba(128,128,128,.3);}"
            "img{max-width:100%;height:auto;}"
            "table{border-collapse:collapse;max-width:100%;}"
            "td,th{border:1px solid rgba(128,128,128,.35);padding:.28em .4em;font-size:.95em;}"
@@ -96,10 +101,11 @@
            ".office-table td,.office-table th{font-size:.85em;padding:.24em .34em;}"
            ".pptx-slide{margin:1.3em 0 .3em;}"
            ".docx-empty{height:.65em;}"
+           "::selection{background:rgba(255,190,60,.55);}"
            "</style>"
            "<style id=\"or-extra\">__EXTRA__</style>"
            "</head>"
-           "<body>"
+           "<body class=\"__MODE__\">"
            "<div id=\"viewport\"><div id=\"content\">__BODY__</div></div>"
            "<script>__JS__</script>"
            "</body></html>";
@@ -107,56 +113,127 @@
 
 + (NSString *)paginatorScript {
     return @"(function(){'use strict';"
-           "var vp=document.getElementById('viewport'),content=document.getElementById('content');"
-           "var gutter=18,pageWidth=390,total=1,current=0,animating=false,animate=true;"
-           "var chapterEls=[],readyFired=false;"
-           "function post(p){try{window.webkit.messageHandlers.omni.postMessage(p);}catch(e){}}"
-           "function measure(){"
-           "pageWidth=Math.max(100,Math.round(vp.clientWidth||window.innerWidth));"
+           "var vp=document.getElementById('viewport');"
+           "var content=document.getElementById('content');"
+           "var gutter=18,pageWidth=390,pageHeight=600,total=1,current=0;"
+           "var animate=true,animating=false,ready=false,queued=false;"
+           "function post(msg){try{window.webkit.messageHandlers.omni.postMessage(msg);}catch(e){}}"
+           "function isVertical(){return document.body.classList.contains('mode-vertical');}"
+           "function setDirection(dir){"
+           "var horizontal=(dir!=='vertical');"
+           "document.body.classList.toggle('mode-vertical',!horizontal);"
+           "document.body.classList.toggle('mode-horizontal',horizontal);"
+           "}"
+           "function metrics(){"
+           "pageWidth=Math.max(120,Math.round(window.innerWidth||document.documentElement.clientWidth||320));"
+           "pageHeight=Math.max(120,Math.round(window.innerHeight||document.documentElement.clientHeight||480));"
            "document.documentElement.style.setProperty('--pw',pageWidth+'px');"
            "void content.offsetHeight;"
-           "var sw=vp.scrollWidth;"
-           "total=Math.max(1,Math.ceil(sw/pageWidth-0.02));"
            "}"
-           "function fractionOf(){return total>1?(current/(total-1)):0;}"
-           "function chapterForPage(index){"
-           "var x=index*pageWidth,found='';"
-           "for(var i=0;i<chapterEls.length;i++){var el=chapterEls[i];"
-           "if(el.getBoundingClientRect().left+vp.scrollLeft<=x+gutter+4)found=el;else break;}"
-           "return found?found.getAttribute('data-chapter')||'':'';"
+           "function maxScroll(){"
+           "if(isVertical()){"
+           "var doc=document.documentElement;"
+           "return Math.max(0,(doc.scrollHeight||document.body.scrollHeight)-(window.innerHeight||doc.clientHeight));"
            "}"
-           "function notify(){post({type:'state',page:current,total:total,fraction:fractionOf(),chapter:chapterForPage(current)});}"
-           "function animateTo(x){"
-           "var start=vp.scrollLeft,delta=x-start;"
-           "if(!animate||Math.abs(delta)<2){vp.scrollLeft=x;return;}"
+           "return Math.max(0,vp.scrollWidth-vp.clientWidth);"
+           "}"
+           "function scrollPos(){"
+           "if(isVertical())return window.pageYOffset||document.documentElement.scrollTop||0;"
+           "return vp.scrollLeft;"
+           "}"
+           "function setScrollPos(x){"
+           "if(isVertical())window.scrollTo(0,x);"
+           "else vp.scrollLeft=x;"
+           "}"
+           "function stepSize(){return isVertical()?Math.max(1,window.innerHeight):pageWidth;}"
+           "function fraction(){return total>1?current/(total-1):0;}"
+           "function recalc(){"
+           "metrics();"
+           "var max=maxScroll();"
+           "if(isVertical()){"
+           "var step=Math.max(1,pageHeight);"
+           "total=Math.max(1,Math.ceil((max+step*0.9)/step));"
+           "}else{"
+           "total=Math.max(1,Math.ceil((max+pageWidth-1)/pageWidth));"
+           "}"
+           "}"
+           "function chapter(){"
+           "var points=[[gutter+6,10],[Math.round(pageWidth/2),10],[gutter+6,60]];"
+           "for(var i=0;i<points.length;i++){"
+           "var el=document.elementFromPoint(points[i][0],points[i][1]);"
+           "if(!el)continue;"
+           "var sec=el.closest?el.closest('[data-chapter]'):null;"
+           "if(sec)return sec.getAttribute('data-chapter')||'';"
+           "}"
+           "return '';"
+           "}"
+           "function notify(){"
+           "if(queued)return;queued=true;"
+           "requestAnimationFrame(function(){queued=false;"
+           "post({type:'state',page:current,total:total,fraction:fraction(),chapter:chapter(),mode:isVertical()?'vertical':'horizontal'});});"
+           "}"
+           "function syncFromScroll(){"
+           "var pos=scrollPos(),step=stepSize();"
+           "current=Math.max(0,Math.min(total-1,Math.round(pos/step)));"
+           "}"
+           "function animateTo(target){"
+           "var start=scrollPos(),delta=target-start;"
+           "if(!animate||Math.abs(delta)<2){setScrollPos(target);syncFromScroll();notify();return;}"
            "animating=true;var t0=null;"
-           "function step(ts){if(t0===null)t0=ts;var p=Math.min(1,(ts-t0)/200);"
-           "var e=1-Math.pow(1-p,3);vp.scrollLeft=start+delta*e;"
-           "if(p<1)requestAnimationFrame(step);else{animating=false;current=Math.round(vp.scrollLeft/pageWidth);notify();}}"
-           "requestAnimationFrame(step);"
+           "function tick(ts){if(t0===null)t0=ts;var p=Math.min(1,(ts-t0)/190);"
+           "var e=1-Math.pow(1-p,3);setScrollPos(start+delta*e);"
+           "if(p<1)return requestAnimationFrame(tick);"
+           "animating=false;syncFromScroll();notify();}"
+           "requestAnimationFrame(tick);"
            "}"
-           "function goTo(index,anim){"
-           "index=Math.max(0,Math.min(total-1,Math.round(index)));current=index;var x=index*pageWidth;"
-           "if(anim)animateTo(x);else{vp.scrollLeft=x;notify();}"
+           "function targetFor(index){"
+           "index=Math.max(0,Math.min(total-1,index));"
+           "if(isVertical()){var max=maxScroll();"
+           "return total>1?(index/(total-1))*max:0;}"
+           "return index*pageWidth;"
            "}"
-           "function prepare(fraction){"
-           "chapterEls=Array.prototype.slice.call(document.querySelectorAll('[data-chapter]'));"
-           "requestAnimationFrame(function(){"
-           "measure();"
-           "current=Math.max(0,Math.min(total-1,Math.round((fraction||0)*Math.max(0,total-1))));"
-           "vp.scrollLeft=current*pageWidth;readyFired=true;"
-           "post({type:'ready',page:current,total:total,fraction:fractionOf()});notify();"
-           "});"
+           "function goTo(index,animated){"
+           "index=Math.max(0,Math.min(total-1,Math.round(index)));current=index;"
+           "var t=targetFor(index);"
+           "if(animated)animateTo(t);else{setScrollPos(t);notify();}"
            "}"
-           "function relayout(fraction){"
-           "measure();"
-           "current=Math.max(0,Math.min(total-1,Math.round((fraction||0)*Math.max(0,total-1))));"
-           "vp.scrollLeft=current*pageWidth;notify();"
+           "function prepare(f){"
+           "recalc();"
+           "var index=total>1?Math.round((f||0)*(total-1)):0;"
+           "goTo(index,false);ready=true;"
+           "post({type:'ready',page:current,total:total,fraction:fraction(),mode:isVertical()?'vertical':'horizontal'});notify();"
+           "}"
+           "function relayout(f){"
+           "recalc();"
+           "var index=total>1?Math.round((f||0)*(total-1)):0;"
+           "goTo(index,false);"
            "}"
            "function goToAnchor(id){"
            "var el=document.getElementById(id);if(!el)return false;"
+           "if(isVertical()){"
+           "var y=el.getBoundingClientRect().top+(window.pageYOffset||0)-8;"
+           "window.scrollTo(0,Math.max(0,y));syncFromScroll();notify();return true;"
+           "}"
            "var abs=el.getBoundingClientRect().left+vp.scrollLeft;"
-           "goTo(Math.max(0,Math.floor(abs/pageWidth)),true);return true;"
+           "var page=Math.floor((abs-gutter)/pageWidth);"
+           "goTo(page,true);return true;"
+           "}"
+           "function find(query){"
+           "if(!query)return {found:0,index:-1};"
+           "var raw=content.innerText||'';"
+           "var hay=raw.toLowerCase(),needle=query.toLowerCase();"
+           "var idx=hay.indexOf(needle);"
+           "if(idx<0)return {found:0,index:-1};"
+           "var max=maxScroll();"
+           "var ratio=raw.length?idx/raw.length:0;"
+           "var page=Math.round(ratio*(total-1));"
+           "goTo(page,true);"
+           "try{var range=document.createRange();var walker=document.createTreeWalker(content,NodeFilter.SHOW_TEXT,null,false);"
+           "var pos=0,node,hits=0;"
+           "while((node=walker.nextNode())){var len=node.nodeValue.length;"
+           "if(pos+len>idx){var start=idx-pos;range.setStart(node,start);range.setEnd(node,Math.min(len,start+needle.length));hits=1;break;}pos+=len;}"
+           "if(hits){var sel=window.getSelection();sel.removeAllRanges();sel.addRange(range);}}catch(e){}"
+           "return {found:1,index:page};"
            "}"
            "function applyStyle(cfg){"
            "var r=document.documentElement.style;"
@@ -170,19 +247,25 @@
            "if(cfg.justify!=null)document.body.classList.toggle('justify',!!cfg.justify);"
            "if(cfg.hyphenate!=null)document.body.classList.toggle('hyphenate',!!cfg.hyphenate);"
            "if(cfg.animate!=null)animate=!!cfg.animate;"
+           "var f=fraction();"
+           "if(cfg.direction)setDirection(cfg.direction);"
+           "recalc();goTo(Math.round(f*(total-1)),false);"
            "}"
            "window.Omni={"
-           "prepare:prepare,relayout:relayout,next:function(){goTo(current+1,animate);},"
-           "prev:function(){goTo(current-1,animate);},goTo:goTo,goToAnchor:goToAnchor,applyStyle:applyStyle,"
-           "state:function(){return{page:current,total:total,fraction:fractionOf()};},"
-           "text:function(){try{return document.getElementById('content').innerText||'';}catch(e){return '';}},"
+           "prepare:prepare,relayout:relayout,find:find,"
+           "next:function(){goTo(current+1,true);},prev:function(){goTo(current-1,true);},"
+           "goTo:goTo,goToAnchor:goToAnchor,applyStyle:applyStyle,"
+           "state:function(){return{page:current,total:total,fraction:fraction(),mode:isVertical()?'vertical':'horizontal'};},"
+           "text:function(){try{return content.innerText||'';}catch(e){return '';}},"
            "pageWidth:function(){return pageWidth;}"
            "};"
-           "vp.addEventListener('scroll',function(){"
-           "if(!readyFired||animating)return;"
-           "var p=Math.round(vp.scrollLeft/pageWidth);if(p!==current){current=p;notify();}"
-           "},{passive:true});"
-           "window.addEventListener('resize',function(){if(readyFired)relayout(fractionOf());});"
+           "function onScroll(){"
+           "if(!ready||animating)return;"
+           "syncFromScroll();notify();"
+           "}"
+           "vp.addEventListener('scroll',onScroll,{passive:true});"
+           "window.addEventListener('scroll',onScroll,{passive:true});"
+           "window.addEventListener('resize',function(){if(!ready)return;var f=fraction();recalc();goTo(Math.round(f*(total-1)),false);});"
            "})();";
 }
 

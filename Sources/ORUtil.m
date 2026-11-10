@@ -1,4 +1,5 @@
 #import "ORUtil.h"
+#import "ORText.h"
 
 @implementation ORUtil
 
@@ -142,6 +143,10 @@
 
 + (BOOL)isRTL {
     return [UIApplication sharedApplication].userInterfaceLayoutDirection == UIUserInterfaceLayoutDirectionRightToLeft;
+}
+
++ (NSString *)stripHTML:(NSString *)html {
+    return [ORText stripHTML:html];
 }
 
 @end

@@ -13,6 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)isWebURLString:(NSString *)string;
 
 + (NSString *)htmlEscape:(NSString *)string;
++ (NSString *)stripHTML:(NSString *)html;
 + (NSString *)attributeEscape:(NSString *)string;
 
 /// Hex-ish color like #RRGGBB for CSS.
