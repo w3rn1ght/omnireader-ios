@@ -167,7 +167,7 @@
     if ([entry[@"navigation"] boolValue]) {
         NSString *next = nil;
         for (NSDictionary *link in entry[@"links"] ?: @[]) {
-            NSString *rel = (link[@"rel"] ?: @"").lowercaseString;
+            NSString *rel = [(NSString *)(link[@"rel"] ?: @"") lowercaseString];
             if ([rel containsString:@"subsection"] || [rel containsString:@"navigation"]) {
                 next = link[@"href"];
                 break;
@@ -175,7 +175,7 @@
         }
         if (next.length == 0) {
             for (NSDictionary *link in entry[@"links"] ?: @[]) {
-                NSString *type = (link[@"type"] ?: @"").lowercaseString;
+                NSString *type = [(NSString *)(link[@"type"] ?: @"") lowercaseString];
                 if ([type containsString:@"atom"] || [type containsString:@"xml"]) {
                     next = link[@"href"];
                     break;

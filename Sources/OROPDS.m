@@ -159,8 +159,8 @@
     NSDictionary *chosen = nil;
     // 1. Prefer a real acquisition link with a known book/audio type.
     for (NSDictionary *link in links) {
-        NSString *type = link[@"type"] ?: @"";
-        NSString *rel = (link[@"rel"] ?: @"").lowercaseString;
+        NSString *type = (NSString *)(link[@"type"] ?: @"");
+        NSString *rel = [(NSString *)(link[@"rel"] ?: @"") lowercaseString];
         BOOL isAcquisition = [rel containsString:@"acquisition"] || [rel isEqualToString:@"enclosure"];
         if (!isAcquisition) continue;
         if (![self isDownloadableType:type]) continue;
@@ -207,8 +207,8 @@
         return;
     }
 
-    NSString *href = chosen[@"href"] ?: @"";
-    NSString *type = (chosen[@"type"] ?: @"").lowercaseString;
+    NSString *href = (NSString *)(chosen[@"href"] ?: @"");
+    NSString *type = [(NSString *)(chosen[@"type"] ?: @"") lowercaseString];
     NSString *extension = @"epub";
     if ([type containsString:@"pdf"]) extension = @"pdf";
     else if ([type containsString:@"text/plain"]) extension = @"txt";
