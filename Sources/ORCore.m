@@ -5,6 +5,7 @@
 NSNotificationName const ORLibraryDidChangeNotification = @"ORLibraryDidChangeNotification";
 
 static NSString *const ORBundlePreferencesPrefix = @"or.";
+static NSString *ORYandexTokenCache = nil;
 
 #pragma mark - Book
 
@@ -518,8 +519,13 @@ static NSString *const ORBundlePreferencesPrefix = @"or.";
 - (NSString *)yandexClientID { return [self.defaults stringForKey:@"or.yandexClientID"] ?: @""; }
 - (void)setYandexClientID:(NSString *)value { [self.defaults setObject:value ?: @"" forKey:@"or.yandexClientID"]; }
 
-- (NSString *)yandexToken { return [ORKeychain stringForKey:@"yandex.token"]; }
+- (NSString *)yandexToken {
+    if (ORYandexTokenCache) return ORYandexTokenCache;
+    ORYandexTokenCache = [ORKeychain stringForKey:@"yandex.token"];
+    return ORYandexTokenCache;
+}
 - (void)setYandexToken:(NSString *)value {
+    ORYandexTokenCache = [value copy];
     if (value.length > 0) {
         [ORKeychain setString:value forKey:@"yandex.token"];
     } else {
@@ -621,6 +627,14 @@ static NSString *const ORBundlePreferencesPrefix = @"or.";
 
 @implementation ORKeychain
 
++ (BOOL)fallbackUsed {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:@"or.keychainFallbackUsed"];
+}
+
++ (BOOL)isUsingFallbackStorage {
+    return [self fallbackUsed];
+}
+
 + (NSMutableDictionary *)baseQueryForKey:(NSString *)key {
     NSMutableDictionary *query = [NSMutableDictionary dictionary];
     query[(__bridge id)kSecClass] = (__bridge id)kSecClassGenericPassword;
@@ -629,20 +643,33 @@ static NSString *const ORBundlePreferencesPrefix = @"or.";
     return query;
 }
 
++ (NSString *)fallbackKey:(NSString *)key {
+    return [NSString stringWithFormat:@"or.secure.%@", key];
+}
+
 + (BOOL)setString:(NSString *)value forKey:(NSString *)key {
     if (key.length == 0) return NO;
     NSData *data = [value dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
     NSMutableDictionary *query = [self baseQueryForKey:key];
     NSDictionary *attributes = @{ (__bridge id)kSecValueData: data };
     OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)query, (__bridge CFDictionaryRef)attributes);
-    if (status == errSecSuccess) return YES;
     if (status == errSecItemNotFound) {
         NSMutableDictionary *insert = [query mutableCopy];
         insert[(__bridge id)kSecValueData] = data;
         insert[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleAfterFirstUnlock;
-        return SecItemAdd((__bridge CFDictionaryRef)insert, NULL) == errSecSuccess;
+        status = SecItemAdd((__bridge CFDictionaryRef)insert, NULL);
     }
-    return NO;
+    if (status == errSecSuccess) {
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:[self fallbackKey:key]];
+        return YES;
+    }
+    // Jailbroken/ad-hoc signed apps often lack keychain-access-groups and get
+    // errSecMissingEntitlement (-34018). Persisting in the app container keeps
+    // the feature usable; the file never leaves the sandbox.
+    NSLog(@"[OmniReader] Keychain unavailable (%d), using app container", (int)status);
+    [[NSUserDefaults standardUserDefaults] setObject:value ?: @"" forKey:[self fallbackKey:key]];
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"or.keychainFallbackUsed"];
+    return YES;
 }
 
 + (NSString *)stringForKey:(NSString *)key {
@@ -652,14 +679,19 @@ static NSString *const ORBundlePreferencesPrefix = @"or.";
     query[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
     CFTypeRef result = NULL;
     OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
-    if (status != errSecSuccess || result == NULL) return nil;
-    NSData *data = (__bridge_transfer NSData *)result;
-    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (status == errSecSuccess && result != NULL) {
+        NSData *data = (__bridge_transfer NSData *)result;
+        NSString *value = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        if (value.length > 0) return value;
+    }
+    return [[NSUserDefaults standardUserDefaults] stringForKey:[self fallbackKey:key]];
 }
 
 + (BOOL)removeKey:(NSString *)key {
     if (key.length == 0) return NO;
-    return SecItemDelete((__bridge CFDictionaryRef)[self baseQueryForKey:key]) == errSecSuccess;
+    SecItemDelete((__bridge CFDictionaryRef)[self baseQueryForKey:key]);
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:[self fallbackKey:key]];
+    return YES;
 }
 
 @end

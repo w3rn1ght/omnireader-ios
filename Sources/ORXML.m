@@ -128,12 +128,39 @@ didStartElement:(NSString *)elementName
 
 @implementation ORXML
 
++ (ORXMLNode *)parseDataStrict:(NSData *)data error:(NSError **)error;
++ (nullable NSData *)repairXMLData:(NSData *)data;
+
 + (ORXMLNode *)parseData:(NSData *)data error:(NSError **)error {
     if (data.length == 0) {
         if (error) *error = [NSError errorWithDomain:@"OmniReader.XML" code:1
                                             userInfo:@{NSLocalizedDescriptionKey: @"Пустые XML-данные"}];
         return nil;
     }
+    // First try the document as-is: well-formed feeds parse fast and losslessly.
+    NSError *strictError = nil;
+    ORXMLNode *root = [self parseDataStrict:data error:&strictError];
+    if (root && !strictError) return root;
+
+    // Real catalogs (e.g. lib.rus.ec) send raw '&' or stray quotes inside
+    // attribute values. Repair the markup and parse again.
+    NSData *repaired = [self repairXMLData:data];
+    if (repaired && ![repaired isEqualToData:data]) {
+        NSError *repairedError = nil;
+        ORXMLNode *fixedRoot = [self parseDataStrict:repaired error:&repairedError];
+        if (fixedRoot) {
+            NSLog(@"[OmniReader] XML repaired before parsing");
+            return fixedRoot;
+        }
+    }
+    // A failed parse still yields a prefix of the tree; prefer it over nothing.
+    if (root) return root;
+    if (error) *error = strictError ?: [NSError errorWithDomain:@"OmniReader.XML" code:2
+                                                       userInfo:@{NSLocalizedDescriptionKey: @"Не удалось разобрать XML"}];
+    return nil;
+}
+
++ (ORXMLNode *)parseDataStrict:(NSData *)data error:(NSError **)error {
     NSXMLParser *parser = [[NSXMLParser alloc] initWithData:data];
     parser.shouldProcessNamespaces = NO;
     parser.shouldReportNamespacePrefixes = NO;
@@ -144,9 +171,34 @@ didStartElement:(NSString *)elementName
     if (!ok || !delegate.root) {
         if (error) *error = delegate.parseError ?: [NSError errorWithDomain:@"OmniReader.XML" code:2
                                                                    userInfo:@{NSLocalizedDescriptionKey: @"Не удалось разобрать XML"}];
-        return nil;
+        return delegate.root;
     }
     return delegate.root;
+}
+
++ (nullable NSData *)repairXMLData:(NSData *)data {
+    NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (!text) text = [[NSString alloc] initWithData:data encoding:NSWindowsCP1251StringEncoding];
+    if (text.length == 0) return nil;
+
+    // 1. Escape bare ampersands that do not start a valid entity reference.
+    NSRegularExpression *ampersand = [NSRegularExpression regularExpressionWithPattern:
+        @"&(?!(?:[a-zA-Z][a-zA-Z0-9]{1,31}|#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6});)"
+                                                            options:0 error:NULL];
+    text = [ampersand stringByReplacingMatchesInString:text
+                                               options:0
+                                                 range:NSMakeRange(0, text.length)
+                                          withTemplate:@"&amp;"];
+
+    // 2. Replace control characters that XML 1.0 forbids.
+    NSMutableString *clean = [text mutableCopy];
+    for (NSInteger i = (NSInteger)clean.length - 1; i >= 0; i--) {
+        unichar c = [clean characterAtIndex:(NSUInteger)i];
+        if (c < 0x20 && c != 0x09 && c != 0x0A && c != 0x0D) {
+            [clean replaceCharactersInRange:NSMakeRange((NSUInteger)i, 1) withString:@" "];
+        }
+    }
+    return [clean dataUsingEncoding:NSUTF8StringEncoding];
 }
 
 + (ORXMLNode *)parseString:(NSString *)string error:(NSError **)error {

@@ -182,6 +182,7 @@ typedef NS_ENUM(NSInteger, ORPageDirection) {
 + (BOOL)setString:(NSString *)value forKey:(NSString *)key;
 + (nullable NSString *)stringForKey:(NSString *)key;
 + (BOOL)removeKey:(NSString *)key;
++ (BOOL)isUsingFallbackStorage;
 
 @end
 

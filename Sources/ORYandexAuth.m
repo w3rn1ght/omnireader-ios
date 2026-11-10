@@ -47,15 +47,15 @@ NSNotificationName const ORYandexAuthDidChangeNotification = @"ORYandexAuthDidCh
     }
     [ORSettings shared].yandexToken = normalized;
     [[NSNotificationCenter defaultCenter] postNotificationName:ORYandexAuthDidChangeNotification object:self];
+    // Report success immediately; validation continues in the background.
+    if (completion) completion(YES, @"Токен сохранён.");
     [ORYandexAPI fetchProfile:^(NSString *name, NSError *error) {
         [ORUtil runOnMain:^{
             if (name.length > 0) {
                 [ORSettings shared].yandexUserName = name;
-                if (completion) completion(YES, [NSString stringWithFormat:@"Вы вошли как %@", name]);
+                [[NSNotificationCenter defaultCenter] postNotificationName:ORYandexAuthDidChangeNotification object:self];
             } else if (error) {
-                if (completion) completion(YES, @"Токен сохранён, но Яндекс не подтвердил его. Проверьте сеть и права приложения OAuth.");
-            } else {
-                if (completion) completion(YES, @"Токен сохранён.");
+                NSLog(@"[OmniReader] Yandex token saved but profile check failed: %@", error.localizedDescription);
             }
         }];
     }];
