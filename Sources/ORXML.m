@@ -128,38 +128,6 @@ didStartElement:(NSString *)elementName
 
 @implementation ORXML
 
-+ (ORXMLNode *)parseDataStrict:(NSData *)data error:(NSError **)error;
-+ (nullable NSData *)repairXMLData:(NSData *)data;
-
-+ (ORXMLNode *)parseData:(NSData *)data error:(NSError **)error {
-    if (data.length == 0) {
-        if (error) *error = [NSError errorWithDomain:@"OmniReader.XML" code:1
-                                            userInfo:@{NSLocalizedDescriptionKey: @"Пустые XML-данные"}];
-        return nil;
-    }
-    // First try the document as-is: well-formed feeds parse fast and losslessly.
-    NSError *strictError = nil;
-    ORXMLNode *root = [self parseDataStrict:data error:&strictError];
-    if (root && !strictError) return root;
-
-    // Real catalogs (e.g. lib.rus.ec) send raw '&' or stray quotes inside
-    // attribute values. Repair the markup and parse again.
-    NSData *repaired = [self repairXMLData:data];
-    if (repaired && ![repaired isEqualToData:data]) {
-        NSError *repairedError = nil;
-        ORXMLNode *fixedRoot = [self parseDataStrict:repaired error:&repairedError];
-        if (fixedRoot) {
-            NSLog(@"[OmniReader] XML repaired before parsing");
-            return fixedRoot;
-        }
-    }
-    // A failed parse still yields a prefix of the tree; prefer it over nothing.
-    if (root) return root;
-    if (error) *error = strictError ?: [NSError errorWithDomain:@"OmniReader.XML" code:2
-                                                       userInfo:@{NSLocalizedDescriptionKey: @"Не удалось разобрать XML"}];
-    return nil;
-}
-
 + (ORXMLNode *)parseDataStrict:(NSData *)data error:(NSError **)error {
     NSXMLParser *parser = [[NSXMLParser alloc] initWithData:data];
     parser.shouldProcessNamespaces = NO;
