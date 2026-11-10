@@ -4,10 +4,11 @@
 #import "ORText.h"
 
 @interface ORYandexAPI ()
-+ (NSString *)baseURL;
-+ (NSString *)graphqlPath;
-+ (NSString *)profilePath;
 + (void)fetchLoginProfile:(ORYandexProfileCompletion)completion;
++ (void)performGET:(NSString *)path completion:(void (^)(id _Nullable json, NSError *_Nullable error))completion;
++ (NSDictionary *)dictionaryFromJSON:(id)json;
++ (NSString *)firstStringIn:(NSDictionary *)dictionary keys:(NSArray<NSString *> *)keys;
++ (NSURL *)URLWithPath:(NSString *)path;
 + (void)fetchProfileLegacy:(ORYandexProfileCompletion)completion;
 + (void)fetchShelfLegacy:(ORYandexShelfCompletion)completion;
 + (void)graphql:(NSString *)query
@@ -15,23 +16,17 @@
      completion:(void (^)(id _Nullable data, NSError *_Nullable error))completion;
 + (BOOL)isUnknownSchemaError:(NSString *)message code:(nullable NSString *)code;
 + (NSArray<NSDictionary *> *)itemsFromGraphQLData:(id)data;
-+ (NSMutableDictionary *)normaliseBookDictionary:(NSDictionary *)raw;
 + (NSString *)stringValue:(id)value keys:(NSArray<NSString *> *)keys;
 + (void)performGraphQLForDebug:(NSString *)query
                     completion:(void (^)(NSString *_Nullable info, NSError *_Nullable error))completion;
-+ (void)performGET:(NSString *)path completion:(void (^)(id _Nullable json, NSError *_Nullable error))completion;
-+ (NSDictionary *)dictionaryFromJSON:(id)json;
-+ (NSString *)firstStringIn:(NSDictionary *)dictionary keys:(NSArray<NSString *> *)keys;
-+ (NSURL *)URLWithPath:(NSString *)path;
 @end
 
 @implementation ORYandexAPI
 
 #pragma mark - Endpoints
 
-// Yandex Books has no public REST API: books.yandex.ru is a Next.js app
-// talking to an Apollo GraphQL endpoint. REST paths below are legacy
-// fallbacks, tried only when GraphQL is unavailable. See Docs/YANDEX.md.
+// Yandex Books web endpoints. They are not part of a documented public API and
+// may change at any time; see Docs/YANDEX.md.
 + (NSString *)baseURL { return @"https://books.yandex.ru"; }
 + (NSString *)graphqlPath { return @"/node-api/bff-graphql-api/"; }
 + (NSString *)profilePath { return @"/api/v1/me"; }
@@ -88,14 +83,11 @@
     }];
 }
 
-#pragma mark - Profile
-
 
 #pragma mark - GraphQL
 
-/// POSTs a GraphQL document. Returns the `data` object or an NSError that
-/// carries the server message (e.g. GRAPHQL_VALIDATION_FAILED means our
-/// query shape no longer matches the schema).
+/// POSTs a GraphQL document. Returns the `data` object or an NSError carrying
+/// the server message (GRAPHQL_VALIDATION_FAILED = query no longer matches).
 + (void)graphql:(NSString *)query
       variables:(NSDictionary *)variables
      completion:(void (^)(id _Nullable data, NSError *_Nullable error))completion {
@@ -111,16 +103,8 @@
     if (variables.count > 0) payload[@"variables"] = variables;
     NSError *encodeError = nil;
     NSData *body = [NSJSONSerialization dataWithJSONObject:payload options:0 error:&encodeError];
-    if (!body) {
-        completion(nil, encodeError);
-        return;
-    }
+    if (!body) { completion(nil, encodeError); return; }
     NSURL *url = [self URLWithPath:[self graphqlPath]];
-    if (!url) {
-        completion(nil, [NSError errorWithDomain:@"OmniReader.Yandex" code:400
-                                       userInfo:@{NSLocalizedDescriptionKey: @"Некорректный адрес GraphQL"}]);
-        return;
-    }
     NSDictionary *headers = @{@"Authorization": [NSString stringWithFormat:@"OAuth %@", token],
                               @"Content-Type": @"application/json",
                               @"Accept": @"application/json",
@@ -130,7 +114,7 @@
         id json = data.length > 0 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
         if (![json isKindOfClass:[NSDictionary class]]) {
             NSString *preview = [[NSString alloc] initWithData:data ?: [NSData data]
-                                                      encoding:NSUTF8StringEncoding];
+                                                      encoding:NSUTF8StringEncoding] ?: @"";
             NSLog(@"[OmniReader] Yandex GraphQL non-JSON: %@", [preview substringToIndex:MIN(preview.length, (NSUInteger)300)]);
             completion(nil, error ?: [NSError errorWithDomain:@"OmniReader.Yandex" code:500
                                                     userInfo:@{NSLocalizedDescriptionKey: @"GraphQL вернул не JSON"}]);
@@ -142,8 +126,8 @@
             NSString *message = [self firstStringIn:first keys:@[@"message"]] ?: @"Ошибка GraphQL";
             NSString *code = first[@"extensions"][@"code"];
             NSLog(@"[OmniReader] Yandex GraphQL error: %@ (%@)", message, code);
-            NSInteger errorCode = [self isUnknownSchemaError:message code:code] ? 422 : 400;
-            completion(nil, [NSError errorWithDomain:@"OmniReader.Yandex" code:errorCode
+            NSInteger codeValue = [self isUnknownSchemaError:message code:code] ? 422 : 400;
+            completion(nil, [NSError errorWithDomain:@"OmniReader.Yandex" code:codeValue
                                            userInfo:@{NSLocalizedDescriptionKey: message}]);
             return;
         }
@@ -151,26 +135,35 @@
     }];
 }
 
-/// True when the failure is about the query shape rather than the account, i.e.
-/// our query no longer matches the deployed schema. Callers then fall back to
-/// the legacy REST probing instead of telling the user they have no books.
 + (BOOL)isUnknownSchemaError:(NSString *)message code:(NSString *)code {
     if ([code isEqualToString:@"GRAPHQL_VALIDATION_FAILED"]) return YES;
     if ([code isEqualToString:@"BAD_USER_INPUT"]) return YES;
-    NSString *lower = message.lowercaseString;
+    NSString *lower = message.lowercaseString ?: @"";
     return [lower containsString:@"cannot query field"] ||
            [lower containsString:@"not found"] ||
            [lower containsString:@"whitelist"];
 }
 
++ (void)performGraphQLForDebug:(NSString *)query
+                    completion:(void (^)(NSString *, NSError *))completion {
+    [self graphql:query variables:nil completion:^(id data, NSError *error) {
+        if (error) { completion(nil, error); return; }
+        NSData *json = [NSJSONSerialization dataWithJSONObject:data ?: @{} options:0 error:NULL];
+        NSString *text = [[NSString alloc] initWithData:json ?: [NSData data] encoding:NSUTF8StringEncoding] ?: @"{}";
+        if (text.length > 600) text = [[text substringToIndex:600] stringByAppendingString:@"…"];
+        completion(text, nil);
+    }];
+}
+
+#pragma mark - Profile
+
+
 + (void)fetchProfile:(ORYandexProfileCompletion)completion {
     NSString *query = @"query Viewer { me { id login displayName } }";
     [self graphql:query variables:nil completion:^(id data, NSError *error) {
-        if (!error) {
-            NSDictionary *viewer = [data isKindOfClass:[NSDictionary class]] ? data[@"me"] : nil;
-            NSString *name = [self firstStringIn:viewer keys:@[@"displayName", @"login", @"id"]];
-            if (name.length > 0) { completion(name, nil); return; }
-        }
+        NSDictionary *viewer = [data isKindOfClass:[NSDictionary class]] ? data[@"me"] : nil;
+        NSString *name = [self firstStringIn:viewer keys:@[@"displayName", @"login", @"id"]];
+        if (name.length > 0) { completion(name, nil); return; }
         [self fetchProfileLegacy:completion];
     }];
 }
@@ -221,81 +214,46 @@
 
 + (void)fetchShelf:(ORYandexShelfCompletion)completion {
     if (!completion) return;
-    // GraphQL first: this is what the site itself uses.
     NSString *query =
-        @"query Library($first: Int) { "
-         "me { id login displayName "
-         "library(first: $first) { "
-         "  items { "
-         "    __typename "
-         "    ... on UserLibraryBook { "
-         "      id title author { name } "
-         "      cover { url } "
-         "      book { id title author { name } cover { url } } "
-         "    } "
-         "  } "
-         "} } }";
-    [self graphql:query
-         variables:@{@"first": @40}
-        completion:^(id data, NSError *error) {
+        @"query Library($first: Int) { me { id login displayName "
+         "library(first: $first) { items { __typename "
+         "... on UserLibraryBook { id title author { name } cover { url } "
+         "book { id title author { name } cover { url } } } } } } }";
+    [self graphql:query variables:@{@"first": @40} completion:^(id data, NSError *error) {
         NSArray *items = [self itemsFromGraphQLData:data];
-        if (items.count > 0) {
-            completion(items, nil);
-            return;
-        }
-        NSInteger code = error.code;
-        NSLog(@"[OmniReader] Yandex GraphQL library: %@", error.localizedDescription ?: @"no items");
-        // 401/403 means the token has no access: report it honestly.
-        if (code == 401 || code == 403) {
-            completion(nil, error);
-            return;
-        }
-        // Otherwise the schema moved: probe the legacy REST paths.
+        if (items.count > 0) { completion(items, nil); return; }
+        if (error.code == 401 || error.code == 403) { completion(nil, error); return; }
+        NSLog(@"[OmniReader] Yandex GraphQL library unusable: %@", error.localizedDescription ?: @"empty");
         [self fetchShelfLegacy:completion];
     }];
 }
 
 + (void)fetchShelfLegacy:(ORYandexShelfCompletion)completion {
     [self performGET:[self shelfPath] completion:^(id json, NSError *error) {
-        if (error) {
-            [self performGET:@"/api/library" completion:^(id fallbackJSON, NSError *fallbackError) {
-                if (fallbackError) {
-                    completion(nil, [NSError errorWithDomain:@"OmniReader.Yandex" code:404
-                                                    userInfo:@{NSLocalizedDescriptionKey:
-                                                                   @"Яндекс Книги не отдают полку по известным адресам (404). "
-                                                                    "Сайт перешёл на GraphQL, схема изменилась — см. Docs/YANDEX.md. "
-                                                                    "Купленные книги можно добавить через «+» → «Импортировать файл»."}]);
-                    return;
-                }
-                completion([self itemsFromJSON:fallbackJSON], nil);
-            }];
-            return;
-        }
-        completion([self itemsFromJSON:json], nil);
+        if (!error) { completion([self itemsFromJSON:json], nil); return; }
+        [self performGET:@"/api/library" completion:^(id fallbackJSON, NSError *fallbackError) {
+            if (!fallbackError) { completion([self itemsFromJSON:fallbackJSON], nil); return; }
+            completion(nil, [NSError errorWithDomain:@"OmniReader.Yandex" code:404
+                                           userInfo:@{NSLocalizedDescriptionKey:
+                                                          @"Яндекс Книги не отдают полку по известным адресам (404): сайт работает через GraphQL, схема изменилась. См. Docs/YANDEX.md; купленные файлы можно добавить через «+» → «Импортировать файл»."}]);
+        }];
     }];
 }
 
-/// Accepts the GraphQL shapes we know: me.library.items[] with either a flat
-/// book object or a nested `book` node, plus author/cover wrappers.
 + (NSArray<NSDictionary *> *)itemsFromGraphQLData:(id)data {
     NSMutableArray *result = [NSMutableArray array];
     if (![data isKindOfClass:[NSDictionary class]]) return result;
     NSDictionary *me = data[@"me"];
-    if (![me isKindOfClass:[NSDictionary class]]) return result;
-    NSDictionary *library = me[@"library"];
-    if (![library isKindOfClass:[NSDictionary class]]) return result;
-    NSArray *items = library[@"items"];
+    NSDictionary *library = [me isKindOfClass:[NSDictionary class]] ? me[@"library"] : nil;
+    NSArray *items = [library isKindOfClass:[NSDictionary class]] ? library[@"items"] : nil;
     if (![items isKindOfClass:[NSArray class]]) return result;
     for (id raw in items) {
         if (![raw isKindOfClass:[NSDictionary class]]) continue;
-        NSDictionary *node = raw[@"book"] ?: raw;
-        NSMutableDictionary *normalised = [[self normaliseBookDictionary:node] mutableCopy];
+        NSDictionary *node = [raw[@"book"] isKindOfClass:[NSDictionary class]] ? raw[@"book"] : raw;
+        NSMutableDictionary *normalised = [NSMutableDictionary dictionaryWithDictionary:[self normaliseBookDictionary:node]];
         NSString *title = normalised[@"title"];
         if (![title isKindOfClass:[NSString class]] || title.length == 0) continue;
-        NSString *identifier = normalised[@"id"];
-        if ((![identifier isKindOfClass:[NSString class]] || identifier.length == 0) && raw[@"id"]) {
-            normalised[@"id"] = raw[@"id"];
-        }
+        if (normalised[@"id"] == nil && raw[@"id"]) normalised[@"id"] = raw[@"id"];
         [result addObject:normalised];
     }
     return result;
@@ -338,16 +296,16 @@
     return result;
 }
 
-/// Books come from GraphQL as { author: { name } } / { cover: { url } }.
+/// GraphQL wraps authors and covers: { author: { name } }, { cover: { url } }.
 + (NSString *)stringValue:(id)value keys:(NSArray<NSString *> *)keys {
     if ([value isKindOfClass:[NSString class]]) return value;
     if ([value isKindOfClass:[NSArray class]]) {
-        NSMutableArray *names = [NSMutableArray array];
+        NSMutableArray *parts = [NSMutableArray array];
         for (id entry in value) {
             NSString *name = [self stringValue:entry keys:keys];
-            if (name.length > 0) [names addObject:name];
+            if (name.length > 0) [parts addObject:name];
         }
-        return [names componentsJoinedByString:@", "];
+        return [parts componentsJoinedByString:@", "];
     }
     if ([value isKindOfClass:[NSDictionary class]]) {
         return [self firstStringIn:value keys:keys] ?: @"";
@@ -371,6 +329,20 @@
     NSString *author = [self firstStringIn:raw keys:@[@"author_name"]];
     if (author.length == 0) author = [self stringValue:raw[@"author"] keys:@[@"name", @"title"]];
     if (author.length == 0) author = [self stringValue:raw[@"authors"] keys:@[@"name", @"title"]];
+    if (author.length == 0) {
+        NSArray *authors = raw[@"authors"];
+        if ([authors isKindOfClass:[NSArray class]]) {
+            NSMutableArray *names = [NSMutableArray array];
+            for (id entry in authors) {
+                if ([entry isKindOfClass:[NSString class]]) [names addObject:entry];
+                else if ([entry isKindOfClass:[NSDictionary class]]) {
+                    NSString *name = [self firstStringIn:entry keys:@[@"name", @"display_name", @"title"]];
+                    if (name.length > 0) [names addObject:name];
+                }
+            }
+            author = [names componentsJoinedByString:@", "];
+        }
+    }
     if (author.length > 0) book[@"author"] = author;
 
     NSString *cover = [self stringValue:raw[@"cover"] keys:@[@"url", @"medium", @"large", @"original"]];
