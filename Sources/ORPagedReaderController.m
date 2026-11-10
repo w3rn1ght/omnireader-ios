@@ -577,7 +577,8 @@
         textField.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
     }];
     [alert addAction:[UIAlertAction actionWithTitle:@"Перейти" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        NSString *value = (alert.textFields.firstObject.text ?: @"").stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet];
+        NSString *rawValue = alert.textFields.firstObject.text ?: @"";
+        NSString *value = [rawValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         if (value.length == 0) return;
         BOOL percent = [value containsString:@"%"] || [value containsString:@"."];
         double number = [[value stringByReplacingOccurrencesOfString:@"%" withString:@""] doubleValue];
@@ -659,7 +660,7 @@
     NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:corpus options:0 range:NSMakeRange(0, corpus.length)];
     for (NSTextCheckingResult *match in matches) {
         if (hits.count >= 60) break;
-        NSString *snippet = [match.result length] > 0 ? [corpus substringWithRange:match.range] : @"";
+        NSString *snippet = [corpus substringWithRange:match.range];
         snippet = [snippet stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
         snippet = [snippet stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         if (snippet.length > 0) [hits addObject:snippet];
