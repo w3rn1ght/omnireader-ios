@@ -108,8 +108,7 @@
     NSDictionary *headers = @{@"Authorization": [NSString stringWithFormat:@"OAuth %@", token],
                               @"Content-Type": @"application/json",
                               @"Accept": @"application/json",
-                              @"Origin": [self baseURL],
-                              @"Referer": [self baseURL stringByAppendingString:@"/"]};
+                              };
     [ORHTTP POST:url.absoluteString body:body headers:headers completion:^(NSData *data, NSHTTPURLResponse *response, NSError *error) {
         id json = data.length > 0 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
         if (![json isKindOfClass:[NSDictionary class]]) {
