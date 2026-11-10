@@ -2,6 +2,16 @@
 
 ## Что это
 
+Сайт `books.yandex.ru` — Next.js-приложение, которое общается с Apollo GraphQL по адресу
+`https://books.yandex.ru/node-api/bff-graphql-api/`. REST-путей вроде `/api/v1/library` **не существует** —
+они отвечают 404. Поэтому с версии 1.3.0 приложение сначала пробует GraphQL (`me { id login displayName }`,
+`me { library(first: N) { items { ... } } }`), а REST остаётся только запасным вариантом.
+
+Если GraphQL отвечает `GRAPHQL_VALIDATION_FAILED` / `Cannot query field`, значит Яндекс изменил схему:
+поправьте запрос в `ORYandexAPI.m` (`+fetchShelf:`, `+fetchProfile:`). Кнопка **Настройки → Яндекс Книги → Статус**
+показывает сырой ответ сервера — это самый быстрый способ увидеть новую схему.
+
+
 Интеграция сделана как **адаптер к веб-эндпоинтам** сервиса `books.yandex.ru`. Официального публичного API Яндекс Книг нет, поэтому:
 
 - список эндпоинтов сосредоточен в одном месте — `Sources/ORYandexAPI.m`, методы `+baseURL`, `+profilePath`, `+shelfPath`, `+itemPathFormat`;

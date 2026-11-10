@@ -34,6 +34,8 @@ extern NSNotificationName const ORYandexAuthDidChangeNotification;
 
 - (void)setManualToken:(NSString *)token
             completion:(nullable void (^)(BOOL success, NSString *_Nullable message))completion;
+
+- (void)debugVerifyToken:(void (^)(NSString *_Nullable info, NSError *_Nullable error))completion;
 - (void)signOut;
 
 @end

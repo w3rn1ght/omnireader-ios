@@ -72,7 +72,10 @@
         } else if (indexPath.row == 1) {
             cell.textLabel.text = @"Статус";
             cell.detailTextLabel.text = signedIn ? ([ORSettings shared].yandexUserName ?: @"Подключено") : @"Не подключено";
-            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            cell.selectionStyle = signedIn ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
+            if (signedIn) {
+                cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            }
         } else {
             cell.textLabel.text = @"Client ID OAuth";
             cell.detailTextLabel.text = [ORSettings shared].yandexClientID.length > 0 ? @"задан" : @"не задан";
@@ -105,7 +108,7 @@
     } else {
         if (indexPath.row == 0) {
             cell.textLabel.text = @"Версия";
-            cell.detailTextLabel.text = @"1.2.0";
+            cell.detailTextLabel.text = @"1.3.0";
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
         } else if (indexPath.row == 1) {
             cell.textLabel.text = @"Поддерживаемые форматы";
@@ -118,8 +121,20 @@
     return cell;
 }
 
-- (void)keepAwakeChanged:(UISwitch *)toggle {
-    [ORSettings shared].keepScreenAwake = toggle.on;
+- (void)verifyYandexToken {
+    UIAlertController *wait = [ORUtil alertWithTitle:@"Проверка токена" message:@"Запрашиваю данные аккаунта у Яндекса…"];
+    [self presentViewController:wait animated:YES completion:nil];
+    [[ORYandexAuth shared] debugVerifyToken:^(NSString *info, NSError *error) {
+        [self dismissViewControllerAnimated:YES completion:^{
+            NSString *message = error
+                ? [NSString stringWithFormat:@"Ошибка: %@\n\nЕсли это 404/GRAPHQL — сайт Книг изменил схему, см. Docs/YANDEX.md.", error.localizedDescription]
+                : [NSString stringWithFormat:@"Ответ Книг: %@", info ?: @"OK"];
+            [ORUtil presentAlertIn:self title:@"Результат проверки" message:message];
+        }];
+    }];
+}
+
+- (void)keepAwakeChanged:(UISwitch *)toggle {    [ORSettings shared].keepScreenAwake = toggle.on;
     [[ORSettings shared] synchronize];
 }
 
@@ -134,6 +149,10 @@
 
     if (indexPath.section == 1) {
         ORYandexAuth *auth = [ORYandexAuth shared];
+        if (indexPath.row == 1 && auth.isSignedIn) {
+            [self verifyYandexToken];
+            return;
+        }
         if (indexPath.row == 0) {
             if (auth.isSignedIn) {
                 [auth signOut];

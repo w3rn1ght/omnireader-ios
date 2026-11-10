@@ -19,6 +19,14 @@ typedef void (^ORYandexProfileCompletion)(NSString *_Nullable name, NSError *_Nu
 + (void)fetchProfile:(ORYandexProfileCompletion)completion;
 + (void)fetchShelf:(ORYandexShelfCompletion)completion;
 
+/// Debug helper used by the app's log: does the current token accept
+/// the GraphQL viewer query at all?
++ (void)verifyGraphQLAccess:(void (^)(NSString *_Nullable info, NSError *_Nullable error))completion;
+
+/// Raw GraphQL probe for the "Проверка токена" action in settings.
++ (void)performGraphQLForDebug:(NSString *)query
+                    completion:(void (^)(NSString *_Nullable info, NSError *_Nullable error))completion;
+
 /// Resolves a direct download (or streaming) URL for one item.
 + (void)resolveDownloadForItem:(NSDictionary *)item
                     completion:(void (^)(NSURL *_Nullable url, NSString *_Nullable format, NSError *_Nullable error))completion;

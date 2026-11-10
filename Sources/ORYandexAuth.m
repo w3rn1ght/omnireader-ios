@@ -200,4 +200,9 @@ NSNotificationName const ORYandexAuthDidChangeNotification = @"ORYandexAuthDidCh
     }];
 }
 
+- (void)debugVerifyToken:(void (^)(NSString *info, NSError *error))completion {
+    NSString *query = @"query Viewer { me { id login displayName } }";
+    [ORYandexAPI performGraphQLForDebug:query completion:completion];
+}
+
 @end

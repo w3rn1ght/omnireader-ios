@@ -61,8 +61,9 @@
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         [strongSelf.spinner stopAnimating];
-        [strongSelf.refreshControl endRefreshing];
+        [strongSelf.tableView.refreshControl endRefreshing];
         if (error) {
+            NSLog(@"[OmniReader] Yandex shelf failed: %@", error);
             [ORUtil presentAlertIn:strongSelf title:@"Яндекс Книги"
                             message:error.localizedDescription ?: @"Не удалось загрузить полку."];
             return;
@@ -71,8 +72,16 @@
         [strongSelf.tableView reloadData];
         if (strongSelf.items.count == 0) {
             [ORUtil presentAlertIn:strongSelf title:@"Полка пуста"
-                            message:@"В аккаунте не найдено книг по текущей схеме API. Подробности и способы ручного импорта — в Docs/YANDEX.md."];
+                            message:@"Аккаунт подключён, но книг не найдено. Подробности — в Docs/YANDEX.md; купленные файлы можно добавить через «+» → «Импортировать файл»."];
         }
+    }];
+}
+
+- (void)debugCheckToken {
+    [ORUtil presentAlertIn:self title:@"Проверка токена" message:@"Отправляю запрос к GraphQL Яндекса…"];
+    [[ORYandexAuth shared] debugVerifyToken:^(NSString *info, NSError *error) {
+        NSString *text = error ? error.localizedDescription : (info ?: @"OK");
+        [ORUtil presentAlertIn:self title:@"Результат" message:text];
     }];
 }
 
