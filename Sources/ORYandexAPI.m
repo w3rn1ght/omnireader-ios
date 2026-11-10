@@ -4,8 +4,10 @@
 #import "ORText.h"
 
 @interface ORYandexAPI ()
++ (NSString *)baseURL;
++ (NSString *)graphqlPath;
++ (NSString *)profilePath;
 + (void)fetchLoginProfile:(ORYandexProfileCompletion)completion;
-
 
 + (void)performGraphQLForDebug:(NSString *)query
                     completion:(void (^)(NSString *, NSError *))completion {
@@ -16,22 +18,8 @@
         }
         NSData *json = [NSJSONSerialization dataWithJSONObject:data ?: @{} options:0 error:NULL];
         NSString *text = [[NSString alloc] initWithData:json ?: [NSData data] encoding:NSUTF8StringEncoding];
-        if (text.length > 500) text = [[text substringToIndex:500] stringByAppendingString:@"…"];
+        if (text.length > 600) text = [[text substringToIndex:600] stringByAppendingString:@"…"];
         completion(text, nil);
-    }];
-}
-
-+ (void)verifyGraphQLAccess:(void (^)(NSString *, NSError *))completion {
-    if (!completion) return;
-    NSString *query = @"query Viewer { me { id login displayName } }";
-    [self graphql:query variables:nil completion:^(id data, NSError *error) {
-        if (error) {
-            completion(nil, error);
-            return;
-        }
-        NSDictionary *me = [data isKindOfClass:[NSDictionary class]] ? data[@"me"] : nil;
-        NSString *name = [self firstStringIn:me keys:@[@"displayName", @"login", @"id"]];
-        completion(name.length > 0 ? name : @"token accepted", nil);
     }];
 }
 
@@ -42,15 +30,14 @@
      completion:(void (^)(id _Nullable data, NSError *_Nullable error))completion;
 + (BOOL)isUnknownSchemaError:(NSString *)message code:(nullable NSString *)code;
 + (NSArray<NSDictionary *> *)itemsFromGraphQLData:(id)data;
++ (NSMutableDictionary *)normaliseBookDictionary:(NSDictionary *)raw;
 + (NSString *)stringValue:(id)value keys:(NSArray<NSString *> *)keys;
-+ (void)performGraphQLForDebug:(NSString *)query completion:(void (^)(NSString *_Nullable info, NSError *_Nullable error))completion;
++ (void)performGraphQLForDebug:(NSString *)query
+                    completion:(void (^)(NSString *_Nullable info, NSError *_Nullable error))completion;
 + (void)performGET:(NSString *)path completion:(void (^)(id _Nullable json, NSError *_Nullable error))completion;
 + (NSDictionary *)dictionaryFromJSON:(id)json;
 + (NSString *)firstStringIn:(NSDictionary *)dictionary keys:(NSArray<NSString *> *)keys;
 + (NSURL *)URLWithPath:(NSString *)path;
-+ (NSString *)baseURL;
-+ (NSString *)graphqlPath;
-+ (NSString *)profilePath;
 @end
 
 @implementation ORYandexAPI
@@ -318,8 +305,12 @@
         if (![raw isKindOfClass:[NSDictionary class]]) continue;
         NSDictionary *node = raw[@"book"] ?: raw;
         NSMutableDictionary *normalised = [[self normaliseBookDictionary:node] mutableCopy];
-        if (normalised[@"title"].length == 0) continue;
-        if (normalised[@"id"].length == 0 && raw[@"id"]) normalised[@"id"] = raw[@"id"];
+        NSString *title = normalised[@"title"];
+        if (![title isKindOfClass:[NSString class]] || title.length == 0) continue;
+        NSString *identifier = normalised[@"id"];
+        if ((![identifier isKindOfClass:[NSString class]] || identifier.length == 0) && raw[@"id"]) {
+            normalised[@"id"] = raw[@"id"];
+        }
         [result addObject:normalised];
     }
     return result;
