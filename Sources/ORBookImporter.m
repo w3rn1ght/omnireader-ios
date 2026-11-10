@@ -4,6 +4,24 @@
 #import "ORUtil.h"
 #import "ORZip.h"
 
+
+static BOOL looksLikeBookContainer(NSData *data) {
+    if (data.length < 4) return NO;
+    const uint8_t *b = data.bytes;
+    // ZIP (EPUB / FB2.zip / CBZ), RAR, PDF, PalmDB (MOBI), DjVu
+    if (b[0] == 'P' && b[1] == 'K') return YES;
+    if (b[0] == 'R' && b[1] == 'a') return YES;
+    if (memcmp(b, "%PDF", 4) == 0) return YES;
+    if (memcmp(b, "AT&T", 4) == 0) return YES;
+    if (memcmp(b, "DJVU", 4) == 0) return YES;
+    if (memcmp(b, "FORM", 4) == 0) return YES;   // AIFF/audio containers
+    if (memcmp(b, "ID3", 3) == 0) return YES;
+    if (b[0] == 0xFF && (b[1] & 0xE0) == 0xE0) return YES; // MP3 frame
+    return NO;
+}
+
+
+
 @implementation ORBookImporter
 
 + (instancetype)shared {
@@ -84,6 +102,24 @@
     book.format = format;
     book.title = originalName.stringByDeletingPathExtension;
     book.fileName = [NSString stringWithFormat:@"%@.%@", book.bookID, extension.length > 0 ? extension : @"bin"];
+
+    // Some catalogs answer a book request with an HTML page ("log in first",
+    // "file not found"). Saving that as a book produced junk TXT entries, so
+    // reject it explicitly unless the user really opened an HTML document.
+    BOOL htmlPayload = [ORText looksLikeHTML:data] && !looksLikeBookContainer(data);
+    BOOL declaresText = (format == ORBookFormatHTML || format == ORBookFormatMarkdown);
+    if (htmlPayload && !declaresText) {
+        NSString *pageText = [ORText stripHTML:[ORText stringFromData:data]];
+        if (pageText.length > 240) pageText = [[pageText substringToIndex:240] stringByAppendingString:@"…"];
+        NSString *message = [NSString stringWithFormat:
+            @"Вместо файла книги сервер вернул веб-страницу.\n\n%@\n\n"
+             "Обычно это значит, что каталог требует входа на своём сайте.",
+            pageText];
+        if (error) *error = [NSError errorWithDomain:@"OmniReader.Import" code:7
+                                            userInfo:@{NSLocalizedDescriptionKey: message}];
+        return nil;
+    }
+
     NSString *destination = [[ORPaths booksDirectory] stringByAppendingPathComponent:book.fileName];
     NSError *writeError = nil;
     BOOL written = [data writeToFile:destination options:NSDataWritingAtomic error:&writeError];

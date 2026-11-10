@@ -14,9 +14,43 @@
 + (nullable NSDictionary *)tolerantFeedFromData:(NSData *)data baseURL:(NSString *)baseURL;
 + (NSString *)attribute:(NSString *)name inTag:(NSString *)tag;
 + (NSString *)unescapeXML:(NSString *)string;
++ (nullable NSError *)validateDownloadedFile:(NSString *)path;
 @end
 
 @implementation OROPDS
+
++ (NSError *)validateDownloadedFile:(NSString *)path {
+    NSData *data = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:NULL];
+    if (!data || data.length == 0) {
+        return [NSError errorWithDomain:@"OmniReader.OPDS" code:4
+                               userInfo:@{NSLocalizedDescriptionKey: @"Сервер вернул пустой файл."}];
+    }
+    if (data.length < 64) {
+        return [NSError errorWithDomain:@"OmniReader.OPDS" code:4
+                               userInfo:@{NSLocalizedDescriptionKey: @"Файл слишком мал — похоже, это не книга."}];
+    }
+    const uint8_t *b = data.bytes;
+    BOOL zip = (b[0] == 'P' && b[1] == 'K');
+    BOOL rar = (b[0] == 'R' && b[1] == 'a');
+    BOOL pdf = memcmp(b, "%PDF", 4) == 0;
+    BOOL mobi = memcmp(b, "AT&T", 4) == 0;
+    BOOL djvu = memcmp(b, "DJVU", 4) == 0;
+    BOOL audio = memcmp(b, "ID3", 3) == 0 || memcmp(b, "fLaC", 4) == 0 ||
+                 (b[0] == 0xFF && (b[1] & 0xE0) == 0xE0) ||
+                 memcmp(b, "OggS", 4) == 0 || memcmp(b, "RIFF", 4) == 0;
+    if (zip || rar || pdf || mobi || djvu || audio) return nil;
+    if ([ORText looksLikeHTML:data]) {
+        NSString *page = [ORText stripHTML:[ORText stringFromData:data]];
+        if (page.length > 200) page = [[page substringToIndex:200] stringByAppendingString:@"…"];
+        return [NSError errorWithDomain:@"OmniReader.OPDS" code:5
+                               userInfo:@{NSLocalizedDescriptionKey:
+                                              [NSString stringWithFormat:
+                                               @"Каталог вернул веб-страницу вместо файла:\n\n%@\n\n"
+                                                "Обычно требуется вход на сайте каталога или скачивание в браузере.", page]}];
+    }
+    return [NSError errorWithDomain:@"OmniReader.OPDS" code:6
+                           userInfo:@{NSLocalizedDescriptionKey: @"Файл не является книгой в известном формате."}];
+}
 
 + (NSDictionary *)headersForCatalog:(NSDictionary *)catalog {
     if (!catalog) return @{@"Accept": @"application/atom+xml,application/xml,*/*"};
@@ -258,6 +292,14 @@
           completion:^(NSString *path, NSError *error) {
         if (error) {
             completion(nil, nil, error);
+            return;
+        }
+        // Catalogs often answer with an HTML page instead of the book (login
+        // wall, "file moved", anti-leech). Report it instead of importing junk.
+        NSError *validationError = [self validateDownloadedFile:path];
+        if (validationError) {
+            [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+            completion(nil, nil, validationError);
             return;
         }
         NSString *base = entry[@"title"] ?: @"book";

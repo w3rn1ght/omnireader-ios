@@ -66,6 +66,9 @@
            "<meta charset=\"utf-8\"/>"
            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover\"/>"
            "<title>__TITLE__</title>"
+           /* Book CSS first: the reader's own rules below must win over EPUB
+              styles that position titles and text over the cover image. */
+           "<style id=\"or-book\">__EXTRA__</style>"
            "<style>"
            "html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);-webkit-text-size-adjust:100%;}"
            "body{overflow-x:hidden;font-family:var(--font-family);}"
@@ -102,9 +105,13 @@
            ".office-table td,.office-table th{font-size:.85em;padding:.24em .34em;}"
            ".pptx-slide{margin:1.3em 0 .3em;}"
            ".docx-empty{height:.65em;}"
+           "/* EPUBs often absolutely position title text on top of the cover.
+              In a paginated reader that overlaps body text. */
+           "#content *{float:none!important;position:static!important;max-width:100%!important;}"
+           "#content img{display:block;margin:.6em auto;height:auto!important;max-height:85vh;}"
+           "#content svg{max-width:100%;height:auto!important;}"
            "::selection{background:rgba(255,190,60,.55);}"
            "</style>"
-           "<style id=\"or-extra\">__EXTRA__</style>"
            "</head>"
            "<body class=\"__MODE__\">"
            "<div id=\"viewport\"><div id=\"content\">__BODY__</div></div>"

@@ -19,6 +19,15 @@
 + (NSString *)stringValue:(id)value keys:(NSArray<NSString *> *)keys;
 + (void)performGraphQLForDebug:(NSString *)query
                     completion:(void (^)(NSString *_Nullable info, NSError *_Nullable error))completion;
++ (void)diagnoseToken:(void (^)(NSString *_Nullable report, NSError *_Nullable error))completion;
++ (NSArray<NSDictionary *> *)viewerCandidates;
++ (void)probeViewerWithCandidates:(NSArray<NSDictionary *> *)candidates
+                            index:(NSUInteger)index
+                            found:(void (^)(NSString *root, NSDictionary *object))found
+                         finished:(void (^)(NSArray<NSString *> *tried))finished;
++ (void)fetchProfileWithoutCache:(ORYandexProfileCompletion)completion;
++ (nullable NSString *)cachedViewerRoot;
++ (void)setCachedViewerRoot:(nullable NSString *)root;
 @end
 
 @implementation ORYandexAPI
@@ -154,15 +163,114 @@
     }];
 }
 
+
+#pragma mark - Schema probe
+
+/// Candidate root fields of the Books GraphQL Query type. Yandex does not
+/// expose `me`; the site is served from a persisted whitelist, so the exact
+/// root field has to be discovered by probing. The working shape is cached.
++ (NSArray<NSDictionary *> *)viewerCandidates {
+    return @[
+        @{@"root": @"viewer", @"name": @[@"displayName", @"login", @"id"]},
+        @{@"root": @"viewerUser", @"name": @[@"displayName", @"login", @"id"]},
+        @{@"root": @"currentUser", @"name": @[@"displayName", @"login", @"id"]},
+        @{@"root": @"user", @"name": @[@"displayName", @"login", @"id"]},
+        @{@"root": @"account", @"name": @[@"displayName", @"login", @"id"]},
+        @{@"root": @"profile", @"name": @[@"displayName", @"login", @"id"]},
+        @{@"root": @"session", @"name": @[@"displayName", @"login", @"id"]},
+        @{@"root": @"userInfo", @"name": @[@"displayName", @"login", @"id"]},
+        @{@"root": @"myProfile", @"name": @[@"displayName", @"login", @"id"]}
+    ];
+}
+
++ (NSString *)cachedViewerRoot {
+    return [[NSUserDefaults standardUserDefaults] stringForKey:@"or.yandexViewerRoot"];
+}
+
++ (void)setCachedViewerRoot:(NSString *)root {
+    [[NSUserDefaults standardUserDefaults] setObject:root ?: @"" forKey:@"or.yandexViewerRoot"];
+}
+
++ (void)probeViewerWithCandidates:(NSArray<NSDictionary *> *)candidates
+                            index:(NSUInteger)index
+                             found:(void (^)(NSString *root, NSDictionary *object))found
+                          finished:(void (^)(NSArray<NSString *> *tried))finished {
+    if (index >= candidates.count) {
+        finished(@[]);
+        return;
+    }
+    NSDictionary *candidate = candidates[index];
+    NSString *root = candidate[@"root"];
+    NSString *query = [NSString stringWithFormat:@"query Probe { %@ { __typename } }", root];
+    [self graphql:query variables:nil completion:^(id data, NSError *error) {
+        NSDictionary *object = [data isKindOfClass:[NSDictionary class]] ? data[root] : nil;
+        if (!error && [object isKindOfClass:[NSDictionary class]]) {
+            [self setCachedViewerRoot:root];
+            NSLog(@"[OmniReader] Yandex GraphQL viewer root = %@", root);
+            found(root, object);
+            return;
+        }
+        NSLog(@"[OmniReader] Yandex GraphQL probe '%@' failed: %@", root, error.localizedDescription ?: @"empty");
+        [self probeViewerWithCandidates:candidates index:index + 1 found:found finished:finished];
+    }];
+}
+
+/// Returns a human readable report for the "Проверить токен" button.
++ (void)diagnoseToken:(void (^)(NSString *report, NSError *error))completion {
+    if (!completion) return;
+    NSMutableString *report = [NSMutableString string];
+    NSString *cached = [self cachedViewerRoot];
+    if (cached.length > 0) {
+        [report appendFormat:@"Ранее найден корень: %@\n", cached];
+    }
+    NSMutableArray<NSString *> *tried = [NSMutableArray array];
+    [self probeViewerWithCandidates:[self viewerCandidates]
+                              index:0
+                               found:^(NSString *root, NSDictionary *object) {
+        [report appendFormat:@"Токен принят. Корень запроса: %@\nОбъект: %@\n",
+                              root, object];
+        completion(report, nil);
+    }
+                          finished:^(NSArray<NSString *> *unused) {
+        [report appendString:@"Токен принят сервером, но ни один известный корень запроса не подошёл.\n"
+                              "Значит Яндекс снова сменил схему — нужен новый список полей (см. Docs/YANDEX.md).\n"];
+        completion(report, nil);
+    }];
+    (void)tried;
+}
+
 #pragma mark - Profile
 
 
 + (void)fetchProfile:(ORYandexProfileCompletion)completion {
-    NSString *query = @"query Viewer { me { id login displayName } }";
-    [self graphql:query variables:nil completion:^(id data, NSError *error) {
-        NSDictionary *viewer = [data isKindOfClass:[NSDictionary class]] ? data[@"me"] : nil;
-        NSString *name = [self firstStringIn:viewer keys:@[@"displayName", @"login", @"id"]];
-        if (name.length > 0) { completion(name, nil); return; }
+    NSString *cached = [self cachedViewerRoot];
+    if (cached.length > 0) {
+        NSString *query = [NSString stringWithFormat:@"query Viewer { %@ { displayName login id } }", cached];
+        [self graphql:query variables:nil completion:^(id data, NSError *error) {
+            NSDictionary *viewer = [data isKindOfClass:[NSDictionary class]] ? data[cached] : nil;
+            NSString *name = [self firstStringIn:viewer keys:@[@"displayName", @"login", @"id"]];
+            if (name.length > 0) { completion(name, nil); return; }
+            [self setCachedViewerRoot:nil];
+            [self fetchProfileWithoutCache:completion];
+        }];
+        return;
+    }
+    [self fetchProfileWithoutCache:completion];
+}
+
++ (void)fetchProfileWithoutCache:(ORYandexProfileCompletion)completion {
+    NSArray<NSDictionary *> *candidates = [self viewerCandidates];
+    [self probeViewerWithCandidates:candidates index:0 found:^(NSString *root, NSDictionary *object) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            [self graphql:[NSString stringWithFormat:@"query Viewer { %@ { displayName login id } }", root]
+                variables:nil
+               completion:^(id data, NSError *error) {
+                NSDictionary *viewer = [data isKindOfClass:[NSDictionary class]] ? data[root] : nil;
+                NSString *name = [self firstStringIn:viewer keys:@[@"displayName", @"login", @"id"]];
+                completion(name, nil);
+            }];
+        });
+    } finished:^(NSArray<NSString *> *unused) {
         [self fetchProfileLegacy:completion];
     }];
 }
@@ -213,11 +321,11 @@
 
 + (void)fetchShelf:(ORYandexShelfCompletion)completion {
     if (!completion) return;
-    NSString *query =
-        @"query Library($first: Int) { me { id login displayName "
-         "library(first: $first) { items { __typename "
-         "... on UserLibraryBook { id title author { name } cover { url } "
-         "book { id title author { name } cover { url } } } } } } }";
+    NSString *root = [self cachedViewerRoot] ?: @"viewer";
+    NSString *query = [NSString stringWithFormat:
+        @"query Library($first: Int) { %@ { __typename library(first: $first) { __typename "
+         "items { __typename ... on UserLibraryBook { id title author { name } cover { url } "
+         "book { id title author { name } cover { url } } } } } } }", root];
     [self graphql:query variables:@{@"first": @40} completion:^(id data, NSError *error) {
         NSArray *items = [self itemsFromGraphQLData:data];
         if (items.count > 0) { completion(items, nil); return; }

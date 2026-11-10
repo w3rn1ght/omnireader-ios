@@ -108,7 +108,7 @@
     } else {
         if (indexPath.row == 0) {
             cell.textLabel.text = @"Версия";
-            cell.detailTextLabel.text = @"1.3.0";
+            cell.detailTextLabel.text = @"1.4.0";
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
         } else if (indexPath.row == 1) {
             cell.textLabel.text = @"Поддерживаемые форматы";
@@ -124,12 +124,9 @@
 - (void)verifyYandexToken {
     UIAlertController *wait = [ORUtil alertWithTitle:@"Проверка токена" message:@"Запрашиваю данные аккаунта у Яндекса…"];
     [self presentViewController:wait animated:YES completion:nil];
-    [[ORYandexAuth shared] debugVerifyToken:^(NSString *info, NSError *error) {
+    [[ORYandexAuth shared] diagnose:^(NSString *report) {
         [self dismissViewControllerAnimated:YES completion:^{
-            NSString *message = error
-                ? [NSString stringWithFormat:@"Ошибка: %@\n\nЕсли это 404/GRAPHQL — сайт Книг изменил схему, см. Docs/YANDEX.md.", error.localizedDescription]
-                : [NSString stringWithFormat:@"Ответ Книг: %@", info ?: @"OK"];
-            [ORUtil presentAlertIn:self title:@"Результат проверки" message:message];
+            [ORUtil presentAlertIn:self title:@"Проверка токена" message:report ?: @"Нет ответа"];
         }];
     }];
 }

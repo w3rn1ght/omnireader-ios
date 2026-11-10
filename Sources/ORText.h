@@ -26,6 +26,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (BOOL)looksLikeZIP:(NSData *)data;
 + (BOOL)looksLikeRAR:(NSData *)data;
++ (BOOL)looksLikeHTML:(NSData *)data;
++ (BOOL)looksLikePDF:(NSData *)data;
 + (BOOL)looksLikeEPUBMimetype:(nullable NSData *)data;
 
 + (NSString *)fileURLString:(NSString *)path;

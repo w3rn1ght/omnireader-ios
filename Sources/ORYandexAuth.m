@@ -201,8 +201,15 @@ NSNotificationName const ORYandexAuthDidChangeNotification = @"ORYandexAuthDidCh
 }
 
 - (void)debugVerifyToken:(void (^)(NSString *info, NSError *error))completion {
-    NSString *query = @"query Viewer { me { id login displayName } }";
-    [ORYandexAPI performGraphQLForDebug:query completion:completion];
+    [self diagnose:^(NSString *report) {
+        if (completion) completion(report, nil);
+    }];
+}
+
+- (void)diagnose:(void (^)(NSString *))completion {
+    [ORYandexAPI diagnoseToken:^(NSString *report, NSError *error) {
+        if (completion) completion(report ?: error.localizedDescription ?: @"Нет ответа");
+    }];
 }
 
 @end

@@ -36,6 +36,7 @@ extern NSNotificationName const ORYandexAuthDidChangeNotification;
             completion:(nullable void (^)(BOOL success, NSString *_Nullable message))completion;
 
 - (void)debugVerifyToken:(void (^)(NSString *_Nullable info, NSError *_Nullable error))completion;
+- (void)diagnose:(void (^)(NSString *_Nullable report))completion;
 - (void)signOut;
 
 @end

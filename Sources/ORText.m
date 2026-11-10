@@ -231,4 +231,24 @@
     return [string stringByAddingPercentEncodingWithAllowedCharacters:set] ?: @"";
 }
 
+
++ (BOOL)looksLikeHTML:(NSData *)data {
+    if (data.length < 8) return NO;
+    NSData *head = [data subdataWithRange:NSMakeRange(0, MIN(data.length, (NSUInteger)512))];
+    NSString *text = [[NSString alloc] initWithData:head encoding:NSUTF8StringEncoding];
+    if (!text) text = [[NSString alloc] initWithData:head encoding:NSWindowsCP1251StringEncoding];
+    if (!text) return NO;
+    NSString *lower = text.lowercaseString;
+    NSArray<NSString *> *markers = @[@"<!doctype html", @"<html", @"<?xml", @"<head", @"<body"];
+    for (NSString *marker in markers) {
+        if ([lower containsString:marker]) return YES;
+    }
+    return NO;
+}
+
++ (BOOL)looksLikePDF:(NSData *)data {
+    if (data.length < 5) return NO;
+    return memcmp(data.bytes, "%PDF-", 5) == 0;
+}
+
 @end

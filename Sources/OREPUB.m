@@ -465,6 +465,27 @@ static NSString *ORSanitiseKey(NSString *key) {
         return [NSString stringWithFormat:@"%@id=\"%@%@\"", spacing, chapterPrefix, identifier];
     });
 
+    // 3b. Inline styles that pin text over the cover break pagination.
+    text = ORRegexReplaceWithBlock(text, @"(?i)(\\s)style\\s*=\\s*\"([^\"]*)\"", ^NSString *(NSTextCheckingResult *match, NSString *source) {
+        NSString *spacing = ORMatchGroup(match, source, 1);
+        NSString *value = ORMatchGroup(match, source, 2);
+        NSMutableArray<NSString *> *kept = [NSMutableArray array];
+        for (NSString *rule in [value componentsSeparatedByString:@";"]) {
+            NSString *trimmed = [rule stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (trimmed.length == 0) continue;
+            NSString *lower = trimmed.lowercaseString;
+            if ([lower hasPrefix:@"position"] || [lower hasPrefix:@"top"] ||
+                [lower hasPrefix:@"left"] || [lower hasPrefix:@"right"] ||
+                [lower hasPrefix:@"bottom"] || [lower hasPrefix:@"z-index"] ||
+                [lower hasPrefix:@"float"] || [lower hasPrefix:@"margin-top"]) {
+                continue;
+            }
+            [kept addObject:trimmed];
+        }
+        if (kept.count == 0) return @"";
+        return [NSString stringWithFormat:@"%@style=\"%@\"", spacing, [kept componentsJoinedByString:@";"]];
+    });
+
     // 4. Resources.
     text = ORRegexReplaceWithBlock(text, @"(?i)(src|poster)\\s*=\\s*\"([^\"]+)\"", ^NSString *(NSTextCheckingResult *match, NSString *source) {
         NSString *attribute = ORMatchGroup(match, source, 1);
