@@ -105,8 +105,8 @@
            ".office-table td,.office-table th{font-size:.85em;padding:.24em .34em;}"
            ".pptx-slide{margin:1.3em 0 .3em;}"
            ".docx-empty{height:.65em;}"
-           "/* EPUBs often absolutely position title text on top of the cover.
-              In a paginated reader that overlaps body text. */
+           "/* EPUBs often position title text over the cover in a paginated "
+           "reader, which makes it overlap body text. */"
            "#content *{float:none!important;position:static!important;max-width:100%!important;}"
            "#content img{display:block;margin:.6em auto;height:auto!important;max-height:85vh;}"
            "#content svg{max-width:100%;height:auto!important;}"
