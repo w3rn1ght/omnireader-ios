@@ -38,6 +38,17 @@
     BOOL audio = memcmp(b, "ID3", 3) == 0 || memcmp(b, "fLaC", 4) == 0 ||
                  (b[0] == 0xFF && (b[1] & 0xE0) == 0xE0) ||
                  memcmp(b, "OggS", 4) == 0 || memcmp(b, "RIFF", 4) == 0;
+    NSString *ext = path.pathExtension.lowercaseString;
+    if ([ext isEqualToString:@"html"] || [ext isEqualToString:@"htm"]) return nil;
+    if ([ext isEqualToString:@"txt"] || [ext isEqualToString:@"md"]) {
+        if (![ORText looksLikeHTML:data]) return nil;
+    }
+    if ([ext isEqualToString:@"fb2"] || [ext isEqualToString:@"xml"]) {
+        NSData *marker = [@"<FictionBook" dataUsingEncoding:NSUTF8StringEncoding];
+        if ([data rangeOfData:marker options:0 range:NSMakeRange(0, MIN(data.length, (NSUInteger)4096))].location != NSNotFound) {
+            return nil;
+        }
+    }
     if (zip || rar || pdf || mobi || djvu || audio) return nil;
     if ([ORText looksLikeHTML:data]) {
         NSString *page = [ORText stripHTML:[ORText stringFromData:data]];

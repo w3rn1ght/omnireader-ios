@@ -106,7 +106,10 @@ static BOOL looksLikeBookContainer(NSData *data) {
     // Some catalogs answer a book request with an HTML page ("log in first",
     // "file not found"). Saving that as a book produced junk TXT entries, so
     // reject it explicitly unless the user really opened an HTML document.
-    BOOL htmlPayload = [ORText looksLikeHTML:data] && !looksLikeBookContainer(data);
+    BOOL fictionBook = [data rangeOfData:[@"FictionBook" dataUsingEncoding:NSUTF8StringEncoding]
+                                 options:0
+                                   range:NSMakeRange(0, MIN(data.length, (NSUInteger)2048))].location != NSNotFound;
+    BOOL htmlPayload = [ORText looksLikeHTML:data] && !looksLikeBookContainer(data) && !fictionBook;
     BOOL declaresText = (format == ORBookFormatHTML || format == ORBookFormatMarkdown);
     if (htmlPayload && !declaresText) {
         NSString *pageText = [ORText stripHTML:[ORText stringFromData:data]];
