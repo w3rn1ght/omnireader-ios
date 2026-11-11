@@ -1,5 +1,6 @@
 #import "OROPDSViewController.h"
 #import "ORBookImporter.h"
+#import "ORCatalogLogin.h"
 #import "ORCore.h"
 #import "OROPDS.h"
 #import "ORSettingsViewController.h"
@@ -86,7 +87,12 @@
     self.tableView.rowHeight = 68;
     self.baseFeedURL = self.feedURL;
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.spinner];
+    UIBarButtonItem *spinnerItem = [[UIBarButtonItem alloc] initWithCustomView:self.spinner];
+    UIBarButtonItem *loginItem = [[UIBarButtonItem alloc] initWithTitle:@"Вход"
+                                                                 style:UIBarButtonItemStylePlain
+                                                                target:self
+                                                                action:@selector(catalogLoginTapped)];
+    self.navigationItem.rightBarButtonItems = @[loginItem, spinnerItem];
     self.tableView.refreshControl = [[UIRefreshControl alloc] init];
     [self.tableView.refreshControl addTarget:self action:@selector(loadFeed) forControlEvents:UIControlEventValueChanged];
 
@@ -118,7 +124,7 @@
         [strongSelf.spinner stopAnimating];
         [strongSelf.tableView.refreshControl endRefreshing];
         if (!feed) {
-            [ORUtil presentAlertIn:strongSelf title:@"OPDS" message:error.localizedDescription ?: @"Не удалось загрузить каталог."];
+            [strongSelf handleCatalogError:error entry:nil];
             return;
         }
         strongSelf.lastFeed = feed;
@@ -280,7 +286,7 @@
         strongSelf.view.userInteractionEnabled = YES;
         [strongSelf.spinner stopAnimating];
         if (!path) {
-            [ORUtil presentAlertIn:strongSelf title:@"OPDS" message:error.localizedDescription ?: @"Не удалось скачать файл."];
+            [strongSelf handleCatalogError:error entry:entry];
             return;
         }
         // Give the temporary file a human readable name before importing.
@@ -307,6 +313,90 @@
                             message:[NSString stringWithFormat:@"«%@» добавлена в библиотеку.", book.title]];
         }];
     }];
+}
+
+#pragma mark - Catalog authentication
+
+- (void)catalogLoginTapped {
+    [self promptCatalogLoginForEntry:nil];
+}
+
+/// Opens the Basic-auth prompt and repeats whatever failed: the feed load or a
+/// single download. Catalogs such as lib.rus.ec hide files from guests, so the
+/// retry is the whole point of asking.
+- (void)promptCatalogLoginForEntry:(nullable NSDictionary *)entry {
+    __weak typeof(self) weakSelf = self;
+    [ORCatalogLogin presentIn:self catalog:self.catalog completion:^(NSDictionary *catalog, BOOL saved) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || !saved) return;
+        strongSelf.catalog = catalog;
+        if (entry) {
+            [strongSelf downloadEntry:entry];
+        } else {
+            [strongSelf loadFeed];
+        }
+    }];
+}
+
+- (BOOL)isAuthenticationError:(NSError *)error {
+    if (error.code == 401 || error.code == 403) return YES;
+    NSString *text = (error.localizedDescription ?: @"").lowercaseString;
+    return [text containsString:@"401"] || [text containsString:@"нужен вход"] ||
+           [text containsString:@"требуется вход"];
+}
+
+- (void)handleCatalogError:(nullable NSError *)error entry:(nullable NSDictionary *)entry {
+    NSError *failure = error ?: [NSError errorWithDomain:@"OmniReader.OPDS" code:1
+                                               userInfo:@{NSLocalizedDescriptionKey: @"Не удалось загрузить каталог."}];
+    BOOL auth = [self isAuthenticationError:failure];
+    BOOL page = [failure.domain isEqualToString:@"OmniReader.OPDS"] && failure.code == 5;
+    if (!auth && !page) {
+        [ORUtil presentAlertIn:self title:@"OPDS" message:failure.localizedDescription];
+        return;
+    }
+    NSString *title = auth ? @"Нужен вход в каталог" : @"Каталог вернул страницу";
+    NSMutableString *message = [NSMutableString stringWithString:failure.localizedDescription ?: @""];
+    if (page) {
+        [message appendString:@"\n\nМожно войти в каталог и повторить попытку. Если сайт не отдаёт "
+                             "файлы через OPDS, откройте страницу в Safari, скачайте книгу и откройте "
+                             "файл в OmniReader."];
+    }
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Войти и повторить"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *action) {
+        [self promptCatalogLoginForEntry:entry];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Открыть в Safari"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *action) {
+        [self openEntryInSafari:entry];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Отмена" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (NSString *)pageURLForEntry:(nullable NSDictionary *)entry {
+    for (NSDictionary *link in entry[@"links"] ?: @[]) {
+        NSString *type = [(NSString *)(link[@"type"] ?: @"") lowercaseString];
+        NSString *rel = [(NSString *)(link[@"rel"] ?: @"") lowercaseString];
+        if ([type containsString:@"html"] || [rel containsString:@"alternate"]) {
+            return link[@"href"];
+        }
+    }
+    for (NSDictionary *link in entry[@"links"] ?: @[]) {
+        NSString *href = link[@"href"];
+        if (href.length > 0) return href;
+    }
+    return self.catalog[@"url"] ?: self.feedURL;
+}
+
+- (void)openEntryInSafari:(nullable NSDictionary *)entry {
+    NSURL *url = [NSURL URLWithString:[self pageURLForEntry:entry] ?: @""];
+    if (!url) return;
+    [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
 }
 
 @end

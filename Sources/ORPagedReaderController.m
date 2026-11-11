@@ -484,8 +484,12 @@
 
     double fraction = self.pageCount > 1 ? (double)self.pageIndex / (double)(self.pageCount - 1) : self.restoreFraction;
     NSString *config = [ORPagedAssets styleConfigurationForSettings:settings];
+    // Disabling the book stylesheet is the most reliable cure for EPUBs that
+    // position titles over the cover or use negative margins/overlaps.
     NSString *js = [NSString stringWithFormat:
-        @"if(window.Omni){window.Omni.applyStyle(%@);}", config];
+        @"try{var b=document.getElementById('or-book');if(b&&b.sheet){b.sheet.disabled=%@;}}catch(e){}"
+         "if(window.Omni){window.Omni.applyStyle(%@);}",
+        settings.simpleLayout ? @"true" : @"false", config];
     [self.webView evaluateJavaScript:js completionHandler:nil];
     self.restoreFraction = fraction;
 }

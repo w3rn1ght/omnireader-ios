@@ -153,6 +153,8 @@ typedef NS_ENUM(NSInteger, ORPageDirection) {
 @property (nonatomic) float playbackRate;
 @property (nonatomic) BOOL keepScreenAwake;
 @property (nonatomic) BOOL syncProgress;
+/// Ignore the book's own CSS (broken EPUBs with overlapping text).
+@property (nonatomic) BOOL simpleLayout;
 
 @property (nonatomic, copy) NSString *yandexClientID;
 @property (nonatomic, copy, nullable) NSString *yandexToken;

@@ -11,6 +11,7 @@
     UISwitch *_justifySwitch;
     UISwitch *_hyphenateSwitch;
     UISwitch *_animateSwitch;
+    UISwitch *_simpleLayoutSwitch;
 }
 
 - (instancetype)initWithSettings:(ORSettings *)settings {
@@ -48,6 +49,7 @@
     _justifySwitch = [self switchWithAction:@selector(controlChanged)];
     _hyphenateSwitch = [self switchWithAction:@selector(controlChanged)];
     _animateSwitch = [self switchWithAction:@selector(controlChanged)];
+    _simpleLayoutSwitch = [self switchWithAction:@selector(controlChanged)];
 }
 
 - (UISlider *)sliderWithMin:(float)min max:(float)max step:(float)step action:(SEL)action {
@@ -74,6 +76,7 @@
     _justifySwitch.on = _settings.justify;
     _hyphenateSwitch.on = _settings.hyphenate;
     _animateSwitch.on = _settings.animatePages;
+    _simpleLayoutSwitch.on = _settings.simpleLayout;
 }
 
 - (void)controlChanged {
@@ -86,6 +89,7 @@
     _settings.justify = _justifySwitch.on;
     _settings.hyphenate = _hyphenateSwitch.on;
     _settings.animatePages = _animateSwitch.on;
+    _settings.simpleLayout = _simpleLayoutSwitch.on;
     [_settings synchronize];
     if (self.onChange) self.onChange();
 }
@@ -107,7 +111,7 @@
         case 0: return 1;
         case 1: return 2;
         case 2: return 4;
-        default: return 3;
+        default: return 4;
     }
 }
 
@@ -165,6 +169,10 @@
         } else if (indexPath.row == 1) {
             cell.textLabel.text = @"Анимация страниц";
             cell.accessoryView = _animateSwitch;
+        } else if (indexPath.row == 2) {
+            cell.textLabel.text = @"Простая вёрстка";
+            cell.detailTextLabel.text = @"без CSS книги";
+            cell.accessoryView = _simpleLayoutSwitch;
         } else {
             cell.textLabel.text = @"Скорость озвучки";
             cell.accessoryView = nil;

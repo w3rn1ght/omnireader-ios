@@ -15,9 +15,65 @@
 + (NSString *)attribute:(NSString *)name inTag:(NSString *)tag;
 + (NSString *)unescapeXML:(NSString *)string;
 + (nullable NSError *)validateDownloadedFile:(NSString *)path;
++ (nullable NSString *)downloadLinkInHTML:(nullable NSData *)data baseURL:(NSString *)baseURL;
 @end
 
 @implementation OROPDS
+
+
+/// Scans an HTML landing page for a link that points at an actual book file.
+/// Used when a catalog answers a download request with a web page instead of
+/// bytes: many sites wrap the file in a "download" button on that page.
++ (NSString *)downloadLinkInHTML:(NSData *)data baseURL:(NSString *)baseURL {
+    if (data.length == 0) return nil;
+    NSString *html = [ORText stringFromData:data];
+    if (html.length == 0) return nil;
+
+    NSArray<NSString *> *known = @[@"epub", @"fb2", @"pdf", @"txt", @"zip", @"cbz", @"cbr",
+                                   @"mobi", @"azw", @"azw3", @"djvu", @"mp3", @"m4b", @"m4a",
+                                   @"flac", @"ogg"];
+    NSRegularExpression *regex =
+        [NSRegularExpression regularExpressionWithPattern:@"<a[^>]+href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>"
+                                                  options:NSRegularExpressionCaseInsensitive |
+                                                          NSRegularExpressionDotMatchesLineSeparators
+                                                    error:NULL];
+    if (!regex) return nil;
+
+    NSString *best = nil;
+    NSInteger bestScore = 0;
+    NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:html
+                                                             options:0
+                                                               range:NSMakeRange(0, html.length)];
+    for (NSTextCheckingResult *match in matches) {
+        if (match.numberOfRanges < 3) continue;
+        NSString *href = [html substringWithRange:[match rangeAtIndex:1]];
+        NSString *label = [html substringWithRange:[match rangeAtIndex:2]];
+        label = [ORText stripHTML:label].lowercaseString;
+        NSString *lower = href.lowercaseString;
+        if (lower.length == 0 || [lower hasPrefix:@"#"] ||
+            [lower hasPrefix:@"javascript:"] || [lower hasPrefix:@"mailto:"]) {
+            continue;
+        }
+        NSString *absolute = [self absoluteURL:href base:baseURL];
+        if (absolute.length == 0 || [absolute isEqualToString:baseURL]) continue;
+        NSString *extension = [NSURL URLWithString:absolute].path.pathExtension.lowercaseString;
+        NSInteger score = 0;
+        if ([known containsObject:extension]) score += 4;
+        if ([lower containsString:@"download"] || [lower containsString:@"getfile"] ||
+            [lower containsString:@"/files/"] || [lower containsString:@"skach"]) {
+            score += 2;
+        }
+        if ([label containsString:@"скач"] || [label containsString:@"download"] ||
+            [label containsString:@"fb2"] || [label containsString:@"epub"]) {
+            score += 2;
+        }
+        if (score > bestScore) {
+            bestScore = score;
+            best = absolute;
+        }
+    }
+    return bestScore >= 4 ? best : nil;
+}
 
 + (NSError *)validateDownloadedFile:(NSString *)path {
     NSData *data = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:NULL];
@@ -57,7 +113,8 @@
                                userInfo:@{NSLocalizedDescriptionKey:
                                               [NSString stringWithFormat:
                                                @"Каталог вернул веб-страницу вместо файла:\n\n%@\n\n"
-                                                "Обычно требуется вход на сайте каталога или скачивание в браузере.", page]}];
+                                                "Обычно требуется вход в каталог. Нажмите «Войти и повторить» "
+                                                "или скачайте книгу в Safari.", page]}];
     }
     return [NSError errorWithDomain:@"OmniReader.OPDS" code:6
                            userInfo:@{NSLocalizedDescriptionKey: @"Файл не является книгой в известном формате."}];
@@ -295,28 +352,44 @@
     }
     if (formatHint.length > 0 && formatHint.length <= 5) extension = formatHint;
 
-    NSString *destination = [[ORPaths cacheDirectory] stringByAppendingPathComponent:
-                                [NSString stringWithFormat:@"opds-%@.%@", [ORUtil uniqueKey], extension]];
-    [ORHTTP download:href
-             headers:[self headersForCatalog:catalog]
-              toPath:destination
-          completion:^(NSString *path, NSError *error) {
-        if (error) {
-            completion(nil, nil, error);
-            return;
-        }
-        // Catalogs often answer with an HTML page instead of the book (login
-        // wall, "file moved", anti-leech). Report it instead of importing junk.
-        NSError *validationError = [self validateDownloadedFile:path];
-        if (validationError) {
+    __block BOOL followedLandingPage = NO;
+    __block void (^attempt)(NSString *url, NSString *ext) = nil;
+    attempt = ^(NSString *url, NSString *ext) {
+        NSString *destination = [[ORPaths cacheDirectory] stringByAppendingPathComponent:
+                                    [NSString stringWithFormat:@"opds-%@.%@", [ORUtil uniqueKey], ext]];
+        [ORHTTP download:url
+                 headers:[self headersForCatalog:catalog]
+                  toPath:destination
+              completion:^(NSString *path, NSError *error) {
+            if (error) {
+                completion(nil, nil, error);
+                return;
+            }
+            // Catalogs often answer with an HTML page instead of the book (login
+            // wall, "file moved", anti-leech). Report it instead of importing junk.
+            NSError *validationError = [self validateDownloadedFile:path];
+            if (!validationError) {
+                NSString *base = entry[@"title"] ?: @"book";
+                completion(path, [NSString stringWithFormat:@"%@.%@", base, ext], nil);
+                return;
+            }
+            // Some pages only hide the real file behind a "download" link.
+            // Follow such a link once, then give up with the original message.
+            NSData *payload = [NSData dataWithContentsOfFile:path
+                                                     options:NSDataReadingMappedIfSafe
+                                                       error:NULL];
             [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+            NSString *next = followedLandingPage ? nil : [self downloadLinkInHTML:payload baseURL:url];
+            if (next.length > 0) {
+                followedLandingPage = YES;
+                NSString *nextExtension = [NSURL URLWithString:next].path.pathExtension.lowercaseString;
+                attempt(next, [known containsObject:nextExtension] ? nextExtension : ext);
+                return;
+            }
             completion(nil, nil, validationError);
-            return;
-        }
-        NSString *base = entry[@"title"] ?: @"book";
-        NSString *suggested = [NSString stringWithFormat:@"%@.%@", base, extension];
-        completion(path, suggested, nil);
-    }];
+        }];
+    };
+    attempt(href, extension);
 }
 
 + (void)resolveSearchURLForFeed:(NSDictionary *)feed

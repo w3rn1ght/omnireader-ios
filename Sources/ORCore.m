@@ -476,7 +476,8 @@ static NSString *ORYandexTokenCache = nil;
             @"or.speechRate": @0.5,
             @"or.playbackRate": @1.0,
             @"or.keepScreenAwake": @YES,
-            @"or.syncProgress": @YES,
+            @@"or.syncProgress": @YES,
+            @"or.simpleLayout": @NO,
             @"or.yandexClientID": @"",
             @"or.opdsCatalogs": @[]
         };
@@ -515,6 +516,8 @@ static NSString *ORYandexTokenCache = nil;
 - (void)setKeepScreenAwake:(BOOL)value { [self.defaults setBool:value forKey:@"or.keepScreenAwake"]; }
 - (BOOL)syncProgress { return [self.defaults boolForKey:@"or.syncProgress"]; }
 - (void)setSyncProgress:(BOOL)value { [self.defaults setBool:value forKey:@"or.syncProgress"]; }
+- (BOOL)simpleLayout { return [self.defaults boolForKey:@"or.simpleLayout"]; }
+- (void)setSimpleLayout:(BOOL)value { [self.defaults setBool:value forKey:@"or.simpleLayout"]; }
 
 - (NSString *)yandexClientID { return [self.defaults stringForKey:@"or.yandexClientID"] ?: @""; }
 - (void)setYandexClientID:(NSString *)value { [self.defaults setObject:value ?: @"" forKey:@"or.yandexClientID"]; }

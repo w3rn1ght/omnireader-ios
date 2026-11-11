@@ -1,5 +1,19 @@
 #import "ORHTTP.h"
 
+
+static NSString *ORHTTPMessageForStatus(NSInteger statusCode) {
+    if (statusCode == 401) {
+        return @"Требуется вход в каталог (HTTP 401). Укажите логин и пароль в настройках каталога.";
+    }
+    if (statusCode == 403) {
+        return @"Доступ запрещён (HTTP 403). Возможно, нужен вход в каталог.";
+    }
+    if (statusCode == 404) {
+        return @"Файл или страница не найдены (HTTP 404).";
+    }
+    return [NSString stringWithFormat:@"HTTP %ld", (long)statusCode];
+}
+
 @implementation ORHTTP
 
 + (NSURLSession *)session {
@@ -54,10 +68,10 @@
             return;
         }
         if (http && (http.statusCode < 200 || http.statusCode >= 300)) {
-            NSString *message = [NSString stringWithFormat:@"HTTP %ld", (long)http.statusCode];
+            NSString *statusMessage = ORHTTPMessageForStatus(http.statusCode);
             NSError *httpError = [NSError errorWithDomain:@"OmniReader.HTTP"
                                                      code:http.statusCode
-                                                 userInfo:@{NSLocalizedDescriptionKey: message}];
+                                                 userInfo:@{NSLocalizedDescriptionKey: statusMessage}];
             completion(data, http, httpError);
             return;
         }
@@ -89,10 +103,10 @@
         }
         NSHTTPURLResponse *http = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
         if (http && (http.statusCode < 200 || http.statusCode >= 300)) {
+            NSString *statusMessage = ORHTTPMessageForStatus(http.statusCode);
             NSError *httpError = [NSError errorWithDomain:@"OmniReader.HTTP"
                                                      code:http.statusCode
-                                                 userInfo:@{NSLocalizedDescriptionKey:
-                                                                [NSString stringWithFormat:@"HTTP %ld", (long)http.statusCode]}];
+                                                 userInfo:@{NSLocalizedDescriptionKey: statusMessage}];
             completion(nil, httpError);
             return;
         }

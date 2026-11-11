@@ -4,6 +4,7 @@
 #import "ORReaderSettingsController.h"
 #import "ORUtil.h"
 #import "ORYandexAuth.h"
+#import "ORCatalogLogin.h"
 
 @implementation ORSettingsViewController
 
@@ -98,8 +99,13 @@
     } else if (indexPath.section == 3) {
         NSArray *catalogs = [ORSettings shared].opdsCatalogs;
         if (indexPath.row < (NSInteger)catalogs.count) {
-            cell.textLabel.text = catalogs[(NSUInteger)indexPath.row][@"name"] ?: @"Каталог";
-            cell.detailTextLabel.text = catalogs[(NSUInteger)indexPath.row][@"url"];
+            NSDictionary *catalog = catalogs[(NSUInteger)indexPath.row];
+            NSString *name = catalog[@"name"] ?: @"Каталог";
+            NSString *savedUser = catalog[@"user"];
+            cell.textLabel.text = savedUser.length > 0
+                ? [NSString stringWithFormat:@"%@ · %@", name, savedUser]
+                : name;
+            cell.detailTextLabel.text = catalog[@"url"];
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         } else {
             cell.textLabel.text = @"Добавить каталог";
@@ -108,7 +114,7 @@
     } else {
         if (indexPath.row == 0) {
             cell.textLabel.text = @"Версия";
-            cell.detailTextLabel.text = @"1.4.0";
+            cell.detailTextLabel.text = @"1.4.1";
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
         } else if (indexPath.row == 1) {
             cell.textLabel.text = @"Поддерживаемые форматы";
@@ -179,6 +185,19 @@
                                                                    preferredStyle:UIAlertControllerStyleActionSheet];
             [sheet addAction:[UIAlertAction actionWithTitle:@"Открыть" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
                 [OROPDSViewController presentCatalog:catalog from:self];
+            }]];
+            [sheet addAction:[UIAlertAction actionWithTitle:@"Логин и пароль" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                [ORCatalogLogin presentIn:self catalog:catalog completion:^(NSDictionary *updated, BOOL saved) {
+                    if (!saved) return;
+                    [tableView reloadSections:[NSIndexSet indexSetWithIndex:3]
+                             withRowAnimation:UITableViewRowAnimationAutomatic];
+                    NSString *user = updated[@"user"];
+                    [ORUtil presentAlertIn:self
+                                     title:@"Каталог"
+                                   message:user.length > 0
+                                           ? [NSString stringWithFormat:@"Сохранён вход: %@", user]
+                                           : @"Логин удалён."];
+                }];
             }]];
             [sheet addAction:[UIAlertAction actionWithTitle:@"Удалить" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
                 [[ORSettings shared] removeOPDSCatalogWithID:catalog[@"id"]];
