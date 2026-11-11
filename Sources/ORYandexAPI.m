@@ -20,6 +20,20 @@
 + (void)performGraphQLForDebug:(NSString *)query
                     completion:(void (^)(NSString *_Nullable info, NSError *_Nullable error))completion;
 + (void)diagnoseToken:(void (^)(NSString *_Nullable report, NSError *_Nullable error))completion;
++ (NSString *)libraryPath;
++ (void)graphqlAtPath:(NSString *)path
+        operationName:(nullable NSString *)operationName
+                query:(NSString *)query
+            variables:(nullable NSDictionary *)variables
+           completion:(void (^)(id _Nullable data, NSError *_Nullable error))completion;
++ (NSString *)myBooksQuery;
++ (void)fetchViewerProfile:(void (^)(NSDictionary *_Nullable profile, NSError *_Nullable error))completion;
++ (void)fetchLibraryCardsForLogin:(NSString *)login
+                            cursor:(NSString *)cursor
+                       accumulated:(NSMutableArray *)accumulated
+                             pages:(NSInteger)pages
+                        completion:(void (^)(NSArray *_Nullable items, NSError *_Nullable error))completion;
++ (NSArray<NSDictionary *> *)itemsFromLibraryCards:(NSArray *)cards;
 + (NSArray<NSDictionary *> *)viewerCandidates;
 + (void)probeViewerWithCandidates:(NSArray<NSDictionary *> *)candidates
                             index:(NSUInteger)index
@@ -38,6 +52,8 @@
 // may change at any time; see Docs/YANDEX.md.
 + (NSString *)baseURL { return @"https://books.yandex.ru"; }
 + (NSString *)graphqlPath { return @"/node-api/bff-graphql-api/"; }
+// Private (whitelisted) operations: profile, my books, loyalty.
++ (NSString *)libraryPath { return @"/node-api/p-graphql/"; }
 + (NSString *)profilePath { return @"/api/v1/me"; }
 + (NSString *)shelfPath { return @"/api/v1/library"; }
 + (NSString *)itemPathFormat { return @"/api/v1/library/%@"; }
@@ -100,6 +116,14 @@
 + (void)graphql:(NSString *)query
       variables:(NSDictionary *)variables
      completion:(void (^)(id _Nullable data, NSError *_Nullable error))completion {
+    [self graphqlAtPath:[self graphqlPath] operationName:nil query:query variables:variables completion:completion];
+}
+
++ (void)graphqlAtPath:(NSString *)path
+        operationName:(NSString *)operationName
+                query:(NSString *)query
+            variables:(NSDictionary *)variables
+           completion:(void (^)(id _Nullable data, NSError *_Nullable error))completion {
     if (!completion) return;
     NSString *token = [ORSettings shared].yandexToken;
     if (token.length == 0) {
@@ -113,11 +137,18 @@
     NSError *encodeError = nil;
     NSData *body = [NSJSONSerialization dataWithJSONObject:payload options:0 error:&encodeError];
     if (!body) { completion(nil, encodeError); return; }
-    NSURL *url = [self URLWithPath:[self graphqlPath]];
-    NSDictionary *headers = @{@"Authorization": [NSString stringWithFormat:@"OAuth %@", token],
-                              @"Content-Type": @"application/json",
-                              @"Accept": @"application/json",
-                              };
+    NSURL *url = [self URLWithPath:path ?: [self graphqlPath]];
+    NSMutableDictionary *headers = [@{@"Authorization": [NSString stringWithFormat:@"OAuth %@", token],
+                                      @"Content-Type": @"application/json",
+                                      @"Accept": @"application/json"} mutableCopy];
+    if (operationName.length > 0) headers[@"x-apollo-operation-name"] = operationName;
+    if ([path isEqualToString:[self libraryPath]]) {
+        // p-graphql inspects these headers when resolving the private schema.
+        headers[@"App-Language"] = @"ru";
+        headers[@"accept-language"] = @"ru,en;q=0.9";
+        headers[@"user-is-authorized"] = @"true";
+        headers[@"allow-ppd-content"] = @"true";
+    }
     [ORHTTP POST:url.absoluteString body:body headers:headers completion:^(NSData *data, NSHTTPURLResponse *response, NSError *error) {
         id json = data.length > 0 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
         if (![json isKindOfClass:[NSDictionary class]]) {
@@ -170,16 +201,15 @@
 /// expose `me`; the site is served from a persisted whitelist, so the exact
 /// root field has to be discovered by probing. The working shape is cached.
 + (NSArray<NSDictionary *> *)viewerCandidates {
+    // Verified against the live schema (November 2026):
+    //   userProfile -> ProfilePayload { login id name yuid email avatar }
+    // There is no `me`, `viewer`, `user` or `profile` root on the BFF endpoint.
     return @[
-        @{@"root": @"viewer", @"name": @[@"displayName", @"login", @"id"]},
-        @{@"root": @"viewerUser", @"name": @[@"displayName", @"login", @"id"]},
-        @{@"root": @"currentUser", @"name": @[@"displayName", @"login", @"id"]},
-        @{@"root": @"user", @"name": @[@"displayName", @"login", @"id"]},
-        @{@"root": @"account", @"name": @[@"displayName", @"login", @"id"]},
-        @{@"root": @"profile", @"name": @[@"displayName", @"login", @"id"]},
-        @{@"root": @"session", @"name": @[@"displayName", @"login", @"id"]},
-        @{@"root": @"userInfo", @"name": @[@"displayName", @"login", @"id"]},
-        @{@"root": @"myProfile", @"name": @[@"displayName", @"login", @"id"]}
+        @{@"root": @"userProfile", @"name": @[@"login", @"id", @"name"]},
+        @{@"root": @"userMeta", @"name": @[@"puid", @"country"]},
+        @{@"root": @"notificationsStatus", @"name": @[@"has_unread_notifications"]},
+        @{@"root": @"allEmotions", @"name": @[@"__typename"]},
+        @{@"root": @"stories", @"name": @[@"__typename"]}
     ];
 }
 
@@ -219,43 +249,54 @@
 + (void)diagnoseToken:(void (^)(NSString *report, NSError *error))completion {
     if (!completion) return;
     NSMutableString *report = [NSMutableString string];
-    NSString *cached = [self cachedViewerRoot];
-    if (cached.length > 0) {
-        [report appendFormat:@"Ранее найден корень: %@\n", cached];
-    }
-    NSMutableArray<NSString *> *tried = [NSMutableArray array];
-    [self probeViewerWithCandidates:[self viewerCandidates]
-                              index:0
-                               found:^(NSString *root, NSDictionary *object) {
-        [report appendFormat:@"Токен принят. Корень запроса: %@\nОбъект: %@\n",
-                              root, object];
-        completion(report, nil);
-    }
-                          finished:^(NSArray<NSString *> *unused) {
-        [report appendString:@"Токен принят сервером, но ни один известный корень запроса не подошёл.\n"
-                              "Значит Яндекс снова сменил схему — нужен новый список полей (см. Docs/YANDEX.md).\n"];
-        completion(report, nil);
+    [self fetchViewerProfile:^(NSDictionary *profile, NSError *profileError) {
+        if (![profile isKindOfClass:[NSDictionary class]] || profile.count == 0) {
+            [report appendFormat:@"Профиль Книг недоступен: %@\n", profileError.localizedDescription ?: @"пусто"];
+            [report appendString:@"Перебираю остальные корни запроса…\n"];
+            [self probeViewerWithCandidates:[self viewerCandidates]
+                                      index:0
+                                      found:^(NSString *root, NSDictionary *object) {
+                [report appendFormat:@"Найден корень: %@\n%@\n", root, object];
+                completion(report, nil);
+            }
+                                  finished:^(NSArray<NSString *> *unused) {
+                [report appendString:@"Ни один корень не подошёл: схема снова изменилась.\n"];
+                completion(report, nil);
+            }];
+            return;
+        }
+        NSString *login = [self firstStringIn:profile keys:@[@"login"]];
+        NSString *name = [self firstStringIn:profile keys:@[@"name", @"login"]];
+        [report appendFormat:@"Аккаунт: %@ (login: %@)\n", name.length > 0 ? name : @"—", login.length > 0 ? login : @"—"];
+        if (login.length == 0) {
+            [report appendString:@"Сервер не вернул login — полка недоступна.\n"];
+            completion(report, nil);
+            return;
+        }
+        [self fetchLibraryCardsForLogin:login
+                                  cursor:@""
+                             accumulated:[NSMutableArray array]
+                                   pages:0
+                              completion:^(NSArray *items, NSError *error) {
+            if (items) [report appendFormat:@"Полка: %lu книг(и)\n", (unsigned long)items.count];
+            if (error) [report appendFormat:@"Полка недоступна: %@\n", error.localizedDescription ?: @"неизвестная ошибка"];
+            completion(report, nil);
+        }];
     }];
-    (void)tried;
 }
 
 #pragma mark - Profile
 
 
 + (void)fetchProfile:(ORYandexProfileCompletion)completion {
-    NSString *cached = [self cachedViewerRoot];
-    if (cached.length > 0) {
-        NSString *query = [NSString stringWithFormat:@"query Viewer { %@ { displayName login id } }", cached];
-        [self graphql:query variables:nil completion:^(id data, NSError *error) {
-            NSDictionary *viewer = [data isKindOfClass:[NSDictionary class]] ? data[cached] : nil;
-            NSString *name = [self firstStringIn:viewer keys:@[@"displayName", @"login", @"id"]];
-            if (name.length > 0) { completion(name, nil); return; }
-            [self setCachedViewerRoot:nil];
-            [self fetchProfileWithoutCache:completion];
-        }];
-        return;
-    }
-    [self fetchProfileWithoutCache:completion];
+    [self fetchViewerProfile:^(NSDictionary *profile, NSError *error) {
+        NSString *name = [self firstStringIn:profile keys:@[@"name", @"login"]];
+        if (name.length > 0) {
+            completion(name, nil);
+            return;
+        }
+        [self fetchProfileLegacy:completion];
+    }];
 }
 
 + (void)fetchProfileWithoutCache:(ORYandexProfileCompletion)completion {
@@ -317,22 +358,288 @@
     }];
 }
 
++ (NSString *)myBooksQuery {
+    // Exact document used by https://books.yandex.ru/my/books/all.
+    // p-graphql validates structure, so keep fragments and field order.
+    return            @"query MyBooksLibraryCards($login: String!, $cursor: String!, $limit: Int!, $sort: UserLibrarySortType!, $filters: UserLibraryFiltersInput!) {\n"
+           @"  user(login: $login) {\n"
+           @"    library {\n"
+           @"      libraryCards(params: {cursor: $cursor, limit: $limit, sort: $sort, filters: $filters}) {\n"
+           @"        cursor\n"
+           @"        page {\n"
+           @"          ...FMyBooksLibraryCard\n"
+           @"        }\n"
+           @"      }\n"
+           @"    }\n"
+           @"  }\n"
+           @"}\n"
+           @"\n"
+           @"fragment FMyBooksCardCover on Cover {\n"
+           @"  url\n"
+           @"  ratio\n"
+           @"  backgroundColorHex\n"
+           @"}\n"
+           @"\n"
+           @"fragment FMyBooksCardPerson on Person {\n"
+           @"  uuid\n"
+           @"  name\n"
+           @"  hidden\n"
+           @"}\n"
+           @"\n"
+           @"fragment FMyBooksCardBook on Book {\n"
+           @"  initUuid\n"
+           @"  name\n"
+           @"  cover {\n"
+           @"    ...FMyBooksCardCover\n"
+           @"  }\n"
+           @"  authors {\n"
+           @"    ...FMyBooksCardPerson\n"
+           @"  }\n"
+           @"  auditory {\n"
+           @"    total\n"
+           @"  }\n"
+           @"}\n"
+           @"\n"
+           @"fragment FMyBooksCardProgress on Progress {\n"
+           @"  progress\n"
+           @"}\n"
+           @"\n"
+           @"fragment FMyBooksCardAvailability on Availability {\n"
+           @"  ageRestriction {\n"
+           @"    value\n"
+           @"  }\n"
+           @"  state {\n"
+           @"    ... on Available {\n"
+           @"      full\n"
+           @"      expiredAt\n"
+           @"      availableUntilWithGracePeriod\n"
+           @"    }\n"
+           @"    ... on Unavailable {\n"
+           @"      reason\n"
+           @"    }\n"
+           @"  }\n"
+           @"}\n"
+           @"\n"
+           @"fragment FMyBooksTextBook on TextBook {\n"
+           @"  book {\n"
+           @"    ...FMyBooksCardBook\n"
+           @"  }\n"
+           @"  progress {\n"
+           @"    ...FMyBooksCardProgress\n"
+           @"  }\n"
+           @"  availability {\n"
+           @"    ...FMyBooksCardAvailability\n"
+           @"  }\n"
+           @"}\n"
+           @"\n"
+           @"fragment FMyBooksCardNarrator on Person {\n"
+           @"  uuid\n"
+           @"  name\n"
+           @"}\n"
+           @"\n"
+           @"fragment FMyBooksAudioBook on AudioBook {\n"
+           @"  book {\n"
+           @"    ...FMyBooksCardBook\n"
+           @"  }\n"
+           @"  progress {\n"
+           @"    ...FMyBooksCardProgress\n"
+           @"  }\n"
+           @"  availability {\n"
+           @"    ...FMyBooksCardAvailability\n"
+           @"  }\n"
+           @"  narrators {\n"
+           @"    ...FMyBooksCardNarrator\n"
+           @"  }\n"
+           @"}\n"
+           @"\n"
+           @"fragment FMyBooksComicBook on ComicBook {\n"
+           @"  book {\n"
+           @"    ...FMyBooksCardBook\n"
+           @"  }\n"
+           @"  progress {\n"
+           @"    ...FMyBooksCardProgress\n"
+           @"  }\n"
+           @"  availability {\n"
+           @"    ...FMyBooksCardAvailability\n"
+           @"  }\n"
+           @"}\n"
+           @"\n"
+           @"fragment FMyBooksTextSerial on TextSerial {\n"
+           @"  book {\n"
+           @"    ...FMyBooksCardBook\n"
+           @"  }\n"
+           @"  progress {\n"
+           @"    ...FMyBooksCardProgress\n"
+           @"  }\n"
+           @"  availability {\n"
+           @"    ...FMyBooksCardAvailability\n"
+           @"  }\n"
+           @"}\n"
+           @"\n"
+           @"fragment FMyBooksLibraryCard on LibraryCard {\n"
+           @"  uuid\n"
+           @"  progress\n"
+           @"  status\n"
+           @"  items {\n"
+           @"    __typename\n"
+           @"    ...FMyBooksTextBook\n"
+           @"    ...FMyBooksAudioBook\n"
+           @"    ...FMyBooksComicBook\n"
+           @"    ...FMyBooksTextSerial\n"
+           @"  }\n"
+           @"}\n";
+}
+
 #pragma mark - Shelf
 
 + (void)fetchShelf:(ORYandexShelfCompletion)completion {
     if (!completion) return;
-    NSString *root = [self cachedViewerRoot] ?: @"viewer";
-    NSString *query = [NSString stringWithFormat:
-        @"query Library($first: Int) { %@ { __typename library(first: $first) { __typename "
-         "items { __typename ... on UserLibraryBook { id title author { name } cover { url } "
-         "book { id title author { name } cover { url } } } } } } }", root];
-    [self graphql:query variables:@{@"first": @40} completion:^(id data, NSError *error) {
-        NSArray *items = [self itemsFromGraphQLData:data];
-        if (items.count > 0) { completion(items, nil); return; }
-        if (error.code == 401 || error.code == 403) { completion(nil, error); return; }
-        NSLog(@"[OmniReader] Yandex GraphQL library unusable: %@", error.localizedDescription ?: @"empty");
-        [self fetchShelfLegacy:completion];
+    [self fetchViewerProfile:^(NSDictionary *profile, NSError *error) {
+        NSString *login = [self firstStringIn:profile keys:@[@"login"]];
+        if (login.length == 0) {
+            NSLog(@"[OmniReader] Yandex shelf: profile unavailable (%@)", error.localizedDescription ?: @"empty");
+            completion(nil, error ?: [NSError errorWithDomain:@"OmniReader.Yandex" code:401
+                                                    userInfo:@{NSLocalizedDescriptionKey:
+                                                                   @"Яндекс не вернул профиль Книг. Проверьте токен."}]);
+            return;
+        }
+        [self fetchLibraryCardsForLogin:login
+                                  cursor:@""
+                             accumulated:[NSMutableArray array]
+                                   pages:0
+                              completion:^(NSArray *items, NSError *error) {
+            if (items.count > 0) {
+                completion(items, nil);
+                return;
+            }
+            if (error) {
+                completion(nil, error);
+                return;
+            }
+            completion(@[], nil);
+        }];
     }];
+}
+
++ (void)fetchViewerProfile:(void (^)(NSDictionary *, NSError *))completion {
+    NSString *query = @"query Viewer { userProfile { login id name yuid email avatar { small large } } }";
+    [self graphql:query variables:nil completion:^(id data, NSError *error) {
+        NSDictionary *profile = [data isKindOfClass:[NSDictionary class]] ? data[@"userProfile"] : nil;
+        if ([profile isKindOfClass:[NSDictionary class]] && profile.count > 0) {
+            [self setCachedViewerRoot:@"userProfile"];
+            completion(profile, nil);
+            return;
+        }
+        completion(nil, error ?: [NSError errorWithDomain:@"OmniReader.Yandex" code:401
+                                                userInfo:@{NSLocalizedDescriptionKey:
+                                                               @"Токен принят, но профиль Книг пуст (нет доступа к аккаунту Books)."}]);
+    }];
+}
+
++ (void)fetchLibraryCardsForLogin:(NSString *)login
+                            cursor:(NSString *)cursor
+                       accumulated:(NSMutableArray *)accumulated
+                             pages:(NSInteger)pages
+                        completion:(void (^)(NSArray *, NSError *))completion {
+    NSDictionary *variables = @{
+        @"login": login,
+        @"cursor": cursor ?: @"",
+        @"limit": @24,
+        @"sort": @"UPDATED_AT",
+        @"filters": @{@"advancedFilters": @[], @"contentTypeFilters": @[]}
+    };
+    [self graphqlAtPath:[self libraryPath]
+          operationName:@"MyBooksLibraryCards"
+                  query:[self myBooksQuery]
+              variables:variables
+             completion:^(id data, NSError *error) {
+        if (error) {
+            NSString *lower = (error.localizedDescription ?: @"").lowercaseString;
+            if ([lower containsString:@"whitelist"]) {
+                completion(nil, [NSError errorWithDomain:@"OmniReader.Yandex" code:422
+                                                userInfo:@{NSLocalizedDescriptionKey:
+                                                               @"Яндекс принял токен, но не отдаёт полку OAuth-клиенту: "
+                                                                "личная библиотека доступна только веб-сессии (закрытый "
+                                                                "whitelist запросов). Купленные книги можно открыть "
+                                                                "файлом: «+» → «Импортировать файл»."}]);
+                return;
+            }
+            completion(nil, error);
+            return;
+        }
+        NSDictionary *user = [data isKindOfClass:[NSDictionary class]] ? data[@"user"] : nil;
+        NSDictionary *library = [user isKindOfClass:[NSDictionary class]] ? user[@"library"] : nil;
+        NSDictionary *cards = [library isKindOfClass:[NSDictionary class]] ? library[@"libraryCards"] : nil;
+        NSArray *page = [cards isKindOfClass:[NSDictionary class]] ? cards[@"page"] : nil;
+        if ([page isKindOfClass:[NSArray class]]) {
+            [accumulated addObjectsFromArray:[self itemsFromLibraryCards:page]];
+        }
+        id nextValue = [cards isKindOfClass:[NSDictionary class]] ? cards[@"cursor"] : nil;
+        NSString *next = [nextValue isKindOfClass:[NSString class]] ? nextValue : nil;
+        if (next.length > 0 && pages < 2) {
+            [self fetchLibraryCardsForLogin:login
+                                     cursor:next
+                                accumulated:accumulated
+                                      pages:pages + 1
+                                 completion:completion];
+            return;
+        }
+        completion(accumulated, nil);
+    }];
+}
+
+/// Flattens `libraryCards.page[]` into the flat dictionaries the UI expects.
++ (NSArray<NSDictionary *> *)itemsFromLibraryCards:(NSArray *)cards {
+    NSMutableArray *result = [NSMutableArray array];
+    for (id rawCard in cards) {
+        if (![rawCard isKindOfClass:[NSDictionary class]]) continue;
+        NSDictionary *card = rawCard;
+        NSArray *items = card[@"items"];
+        if (![items isKindOfClass:[NSArray class]]) continue;
+        NSDictionary *chosen = nil;
+        for (id rawItem in items) {
+            if (![rawItem isKindOfClass:[NSDictionary class]]) continue;
+            NSDictionary *item = rawItem;
+            if (![item[@"book"] isKindOfClass:[NSDictionary class]]) continue;
+            // Prefer the audio edition when a card carries several formats.
+            if (!chosen || [item[@"__typename"] isEqualToString:@"AudioBook"]) chosen = item;
+            if ([item[@"__typename"] isEqualToString:@"AudioBook"]) break;
+        }
+        if (!chosen) continue;
+        NSDictionary *book = chosen[@"book"];
+        NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+        id title = book[@"name"];
+        entry[@"title"] = [title isKindOfClass:[NSString class]] && [title length] > 0 ? title : @"Без названия";
+        id identifier = book[@"initUuid"] ?: card[@"uuid"];
+        if ([identifier isKindOfClass:[NSString class]] && [identifier length] > 0) entry[@"id"] = identifier;
+        BOOL audio = [chosen[@"__typename"] isEqualToString:@"AudioBook"];
+        entry[@"isAudio"] = @(audio);
+        entry[@"format"] = audio ? @"audio" : @"epub";
+
+        NSMutableArray<NSString *> *names = [NSMutableArray array];
+        id rawAuthors = book[@"authors"];
+        if ([rawAuthors isKindOfClass:[NSArray class]]) {
+            for (id rawAuthor in rawAuthors) {
+                if (![rawAuthor isKindOfClass:[NSDictionary class]]) continue;
+                id name = rawAuthor[@"name"];
+                if ([name isKindOfClass:[NSString class]] && [name length] > 0) [names addObject:name];
+            }
+        }
+        if (names.count > 0) entry[@"author"] = [names componentsJoinedByString:@", "];
+
+        NSDictionary *cover = [book[@"cover"] isKindOfClass:[NSDictionary class]] ? book[@"cover"] : nil;
+        id coverURL = cover[@"url"];
+        if ([coverURL isKindOfClass:[NSString class]] && [coverURL length] > 0) entry[@"cover"] = coverURL;
+
+        id progress = nil;
+        NSDictionary *progressObject = [chosen[@"progress"] isKindOfClass:[NSDictionary class]] ? chosen[@"progress"] : nil;
+        if (progressObject) progress = progressObject[@"progress"];
+        if (![progress isKindOfClass:[NSNumber class]]) progress = card[@"progress"];
+        if ([progress isKindOfClass:[NSNumber class]]) entry[@"progress"] = progress;
+
+        [result addObject:entry];
+    }
+    return result;
 }
 
 + (void)fetchShelfLegacy:(ORYandexShelfCompletion)completion {

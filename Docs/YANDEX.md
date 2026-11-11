@@ -87,3 +87,56 @@ curl -H "Authorization: OAuth $TOKEN" https://books.yandex.ru/api/v1/library
 
 Кнопка **Настройки → Яндекс Книги → Статус** печатает отчёт: какой корень принят и что вернул сервер.
 Если все корни отвергнуты — схема снова изменилась, нужен новый список полей.
+
+
+## Реальная схема (проверено в ноябре 2026)
+
+Корень `Query` у `bff-graphql-api` **не содержит** `me`, `viewer`, `user`,
+`profile` или `library`. Рабочие корни:
+
+| Поле | Аргументы | Что возвращает |
+|------|-----------|----------------|
+| `userProfile` | — | `{ login id name yuid email avatar }` — текущий аккаунт |
+| `userMeta` | — | `{ puid country ... }` |
+| `profileBookshelves` | `page: Int!, perPage: Int!` | публичные полки профиля |
+| `userBookshelves` | `login: String!` | полки пользователя |
+| `userInfo` | `login: String!` | карточка пользователя |
+| `userNotifications` | `page, perPage` | уведомления |
+
+Приложение проверяет токен запросом
+`query Viewer { userProfile { login id name } }`; при успехе показывает логин,
+затем пробует личную полку.
+
+## Личная полка и whitelist
+
+Личная библиотека живёт на втором эндпоинте:
+
+```
+POST https://books.yandex.ru/node-api/p-graphql/
+query MyBooksLibraryCards($login: String!, $cursor: String!, $limit: Int!,
+                          $sort: UserLibrarySortType!, $filters: UserLibraryFiltersInput!) {
+  user(login: $login) {
+    library {
+      libraryCards(params: {cursor: $cursor, limit: $limit,
+                            sort: $sort, filters: $filters}) {
+        cursor
+        page { ...FMyBooksLibraryCard }
+      }
+    }
+  }
+}
+```
+
+`sort` — `UPDATED_AT` или `ADDED_AT`; `filters` — `{advancedFilters: [],
+contentTypeFilters: []}` (плюс `statusFilter: FINISHED | IN_PROGRESS | PENDING`).
+
+Эндпоинт `p-graphql` отдаёт только запросы из серверного whitelist и, судя по
+поведению, привязан к веб-сессии (Passport cookie). С OAuth-токеном без cookie
+он отвечает `Whitelist: query not found`. Поэтому приложение:
+
+1. показывает профиль и счётчик книг, если сервер их отдал;
+2. при ошибке whitelist объясняет, что полка недоступна OAuth-клиенту,
+   и предлагает импортировать файл вручную.
+
+Если Яндекс откроет `p-graphql` для OAuth, адаптер уже отправляет точный
+документ `MyBooksLibraryCards`, поэтому полка заработает без изменений кода.
