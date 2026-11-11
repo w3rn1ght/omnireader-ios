@@ -476,7 +476,7 @@ static NSString *ORYandexTokenCache = nil;
             @"or.speechRate": @0.5,
             @"or.playbackRate": @1.0,
             @"or.keepScreenAwake": @YES,
-            @@"or.syncProgress": @YES,
+            @"or.syncProgress": @YES,
             @"or.simpleLayout": @NO,
             @"or.yandexClientID": @"",
             @"or.opdsCatalogs": @[]
