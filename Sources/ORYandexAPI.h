@@ -27,6 +27,9 @@ typedef void (^ORYandexProfileCompletion)(NSString *_Nullable name, NSError *_Nu
 + (void)performGraphQLForDebug:(NSString *)query
                     completion:(void (^)(NSString *_Nullable info, NSError *_Nullable error))completion;
 
+/// Probes the GraphQL schema for a working viewer root and reports the result.
++ (void)diagnoseToken:(void (^)(NSString *_Nullable report, NSError *_Nullable error))completion;
+
 /// Resolves a direct download (or streaming) URL for one item.
 + (void)resolveDownloadForItem:(NSDictionary *)item
                     completion:(void (^)(NSURL *_Nullable url, NSString *_Nullable format, NSError *_Nullable error))completion;
