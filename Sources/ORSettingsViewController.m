@@ -28,6 +28,14 @@
     }
 }
 
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    if (section == 3) {
+        return @"Вход не обязателен: каталоги открываются и книги скачиваются анонимно. "
+                "Логин и пароль нужны только если конкретный сервер без них не отдаёт файлы.";
+    }
+    return nil;
+}
+
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     switch (section) {
         case 0: return @"Чтение";
@@ -114,7 +122,7 @@
     } else {
         if (indexPath.row == 0) {
             cell.textLabel.text = @"Версия";
-            cell.detailTextLabel.text = @"1.4.2";
+            cell.detailTextLabel.text = @"1.4.3";
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
         } else if (indexPath.row == 1) {
             cell.textLabel.text = @"Поддерживаемые форматы";
@@ -278,7 +286,7 @@
         textField.autocorrectionType = UITextAutocorrectionTypeNo;
     }];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-        textField.placeholder = @"Логин (если нужен)";
+        textField.placeholder = @"Логин (необязательно)";
         textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
     }];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {

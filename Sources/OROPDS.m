@@ -16,14 +16,18 @@
 + (NSString *)unescapeXML:(NSString *)string;
 + (nullable NSError *)validateDownloadedFile:(NSString *)path;
 + (nullable NSString *)downloadLinkInHTML:(nullable NSData *)data baseURL:(NSString *)baseURL;
++ (NSArray<NSString *> *)derivedDownloadURLsForURL:(NSString *)entryURL;
++ (NSString *)refererForURL:(NSString *)urlString;
++ (NSString *)browserUserAgent;
++ (NSDictionary *)downloadHeadersForCatalog:(nullable NSDictionary *)catalog referer:(nullable NSString *)referer;
 @end
 
 @implementation OROPDS
 
 
-/// Scans an HTML landing page for a link that points at an actual book file.
-/// Used when a catalog answers a download request with a web page instead of
-/// bytes: many sites wrap the file in a "download" button on that page.
+/// Scans an HTML landing page for the actual book file. Catalogs reply with
+/// interstitials for anonymous downloads ("file starts in a moment", anti-leech
+/// pages, JS buttons); all of them expose the real URL in markup or script.
 + (NSString *)downloadLinkInHTML:(NSData *)data baseURL:(NSString *)baseURL {
     if (data.length == 0) return nil;
     NSString *html = [ORText stringFromData:data];
@@ -32,47 +36,120 @@
     NSArray<NSString *> *known = @[@"epub", @"fb2", @"pdf", @"txt", @"zip", @"cbz", @"cbr",
                                    @"mobi", @"azw", @"azw3", @"djvu", @"mp3", @"m4b", @"m4a",
                                    @"flac", @"ogg"];
-    NSRegularExpression *regex =
-        [NSRegularExpression regularExpressionWithPattern:@"<a[^>]+href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>"
-                                                  options:NSRegularExpressionCaseInsensitive |
-                                                          NSRegularExpressionDotMatchesLineSeparators
-                                                    error:NULL];
-    if (!regex) return nil;
+    // Advert networks wrap book pages too; never hand their links to the downloader.
+    NSArray<NSString *> *adHosts = @[@"litres.ru", @"24day.ru", @"adfox", @"yandex", @"google",
+                                     @"doubleclick", @"ozon.ru", @"wildberries", @"bookmate.com"];
+    NSString *baseHost = [NSURL URLWithString:baseURL].host.lowercaseString ?: @"";
+
+    NSMutableArray<NSString *> *raw = [NSMutableArray array];
+    void (^collect)(NSString *, NSRegularExpressionOptions) = ^(NSString *pattern, NSRegularExpressionOptions options) {
+        NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:pattern
+                                                                              options:options
+                                                                                error:NULL];
+        if (!regex) return;
+        NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:html
+                                                                  options:0
+                                                                    range:NSMakeRange(0, html.length)];
+        for (NSTextCheckingResult *match in matches) {
+            if (match.numberOfRanges < 2) continue;
+            NSString *value = [html substringWithRange:[match rangeAtIndex:1]];
+            if (value.length > 0) [raw addObject:value];
+        }
+    };
+
+    // Plain links, JS buttons and redirects used by OPDS book pages.
+    collect(@"<a[^>]+href\\s*=\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
+    collect(@"window\\.open\\s*\\(\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
+    collect(@"(?:window\\.)?location(?:\\.href)?\\s*=\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
+    collect(@"location\\.replace\\s*\\(\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
+    collect(@"<meta[^>]+content\\s*=\\s*[\"'][^\"']*url=([^\"';]+)", NSRegularExpressionCaseInsensitive);
+    // Any quoted URL that already looks like a book file.
+    collect(@"[\"']((?:https?:)?//[^\"']+\\.(?:fb2|epub|pdf|txt|zip|mobi|azw3?))[\"']", NSRegularExpressionCaseInsensitive);
+    collect(@"[\"'](/[^\"']+\\.(?:fb2|epub|pdf|txt|zip|mobi|azw3?))[\"']", NSRegularExpressionCaseInsensitive);
+    // Flibusta-style endpoints, also when hidden inside an onclick handler.
+    collect(@"((?:https?://[^\"'\\s]+)?/b/\\d+/download/\\?format=[a-z0-9.]+)", NSRegularExpressionCaseInsensitive);
 
     NSString *best = nil;
     NSInteger bestScore = 0;
-    NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:html
-                                                             options:0
-                                                               range:NSMakeRange(0, html.length)];
-    for (NSTextCheckingResult *match in matches) {
-        if (match.numberOfRanges < 3) continue;
-        NSString *href = [html substringWithRange:[match rangeAtIndex:1]];
-        NSString *label = [html substringWithRange:[match rangeAtIndex:2]];
-        label = [ORText stripHTML:label].lowercaseString;
+    for (NSString *href in raw) {
         NSString *lower = href.lowercaseString;
-        if (lower.length == 0 || [lower hasPrefix:@"#"] ||
-            [lower hasPrefix:@"javascript:"] || [lower hasPrefix:@"mailto:"]) {
+        if (lower.length == 0 || [lower hasPrefix:@"#"] || [lower hasPrefix:@"javascript:"] ||
+            [lower hasPrefix:@"mailto:"] || [lower hasPrefix:@"data:"]) {
             continue;
         }
         NSString *absolute = [self absoluteURL:href base:baseURL];
         if (absolute.length == 0 || [absolute isEqualToString:baseURL]) continue;
-        NSString *extension = [NSURL URLWithString:absolute].path.pathExtension.lowercaseString;
+        NSURL *url = [NSURL URLWithString:absolute];
+        NSString *host = url.host.lowercaseString ?: @"";
+        BOOL advert = NO;
+        for (NSString *needle in adHosts) {
+            if (host.length > 0 && [host containsString:needle]) { advert = YES; break; }
+        }
+        if (advert) continue;
+        NSString *extension = url.path.pathExtension.lowercaseString;
         NSInteger score = 0;
         if ([known containsObject:extension]) score += 4;
-        if ([lower containsString:@"download"] || [lower containsString:@"getfile"] ||
-            [lower containsString:@"/files/"] || [lower containsString:@"skach"]) {
-            score += 2;
+        if ([lower containsString:@"/download"] || [lower containsString:@"getfile"] ||
+            [lower containsString:@"format="] || [lower containsString:@"/files/"] ||
+            [lower containsString:@"skach"]) {
+            score += 3;
         }
-        if ([label containsString:@"скач"] || [label containsString:@"download"] ||
-            [label containsString:@"fb2"] || [label containsString:@"epub"]) {
-            score += 2;
-        }
+        if (host.length > 0 && [host isEqualToString:baseHost]) score += 2;
+        if ([lower containsString:@"fb2"] || [lower containsString:@"epub"]) score += 1;
         if (score > bestScore) {
             bestScore = score;
             best = absolute;
         }
     }
     return bestScore >= 4 ? best : nil;
+}
+
+/// Derives the direct file endpoints used by common OPDS engines when an entry
+/// points at a book page (`/b/123/fb2`) instead of a file.
++ (NSArray<NSString *> *)derivedDownloadURLsForURL:(NSString *)entryURL {
+    NSMutableArray<NSString *> *result = [NSMutableArray array];
+    if (entryURL.length == 0) return result;
+    NSURL *url = [NSURL URLWithString:entryURL];
+    NSString *path = url.path ?: @"";
+    NSRegularExpression *regex =
+        [NSRegularExpression regularExpressionWithPattern:@"^(.*?/b/\\d+)(?:/[a-z0-9]+)?/?$"
+                                                  options:NSRegularExpressionCaseInsensitive
+                                                    error:NULL];
+    NSTextCheckingResult *match = [regex firstMatchInString:path
+                                                    options:0
+                                                      range:NSMakeRange(0, path.length)];
+    if (match) {
+        NSString *root = [path substringWithRange:[match rangeAtIndex:1]];
+        for (NSString *format in @[@"fb2.zip", @"epub", @"pdf", @"txt.zip"]) {
+            NSString *candidate = [NSString stringWithFormat:@"%@/download/?format=%@", root, format];
+            NSString *absolute = [self absoluteURL:candidate base:entryURL];
+            if (absolute.length > 0) [result addObject:absolute];
+        }
+    }
+    if ([path hasSuffix:@"/download"]) {
+        for (NSString *format in @[@"fb2.zip", @"epub"]) {
+            NSString *separator = [entryURL containsString:@"?"] ? @"&" : @"?";
+            [result addObject:[entryURL stringByAppendingFormat:@"%@format=%@", separator, format]];
+        }
+    }
+    return result;
+}
+
+/// Books servers often reject anonymous files unless the request looks like it
+/// came from the book page.
++ (NSString *)refererForURL:(NSString *)urlString {
+    NSURL *url = [NSURL URLWithString:urlString];
+    NSString *path = url.path ?: @"";
+    NSRegularExpression *regex =
+        [NSRegularExpression regularExpressionWithPattern:@"(/b/\\d+)" options:0 error:NULL];
+    NSTextCheckingResult *match = [regex firstMatchInString:path
+                                                    options:0
+                                                      range:NSMakeRange(0, path.length)];
+    if (match) {
+        NSString *bookPath = [path substringWithRange:[match rangeAtIndex:1]];
+        return [NSString stringWithFormat:@"%@://%@%@", url.scheme ?: @"https", url.host ?: @"", bookPath];
+    }
+    return urlString;
 }
 
 + (NSError *)validateDownloadedFile:(NSString *)path {
@@ -113,21 +190,49 @@
                                userInfo:@{NSLocalizedDescriptionKey:
                                               [NSString stringWithFormat:
                                                @"Каталог вернул веб-страницу вместо файла:\n\n%@\n\n"
-                                                "Обычно требуется вход в каталог. Нажмите «Войти и повторить» "
-                                                "или скачайте книгу в Safari.", page]}];
+                                                "Скорее всего, сайт показывает кнопку или обратный отсчёт. "
+                                                "Можно повторить загрузку или открыть книгу в Safari.", page]}];
     }
     return [NSError errorWithDomain:@"OmniReader.OPDS" code:6
                            userInfo:@{NSLocalizedDescriptionKey: @"Файл не является книгой в известном формате."}];
 }
 
++ (NSString *)browserUserAgent {
+    return @"Mozilla/5.0 (iPhone; CPU iPhone OS 12_5 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1 Mobile/15E148 Safari/604.1";
+}
+
 + (NSDictionary *)headersForCatalog:(NSDictionary *)catalog {
-    if (!catalog) return @{@"Accept": @"application/atom+xml,application/xml,*/*"};
+    NSMutableDictionary *headers =
+        [@{@"Accept": @"application/atom+xml,application/xml,*/*",
+           @"User-Agent": [self browserUserAgent]} mutableCopy];
     NSString *user = catalog[@"user"];
-    if (user.length == 0) return @{@"Accept": @"application/atom+xml,application/xml,*/*"};
-    NSString *password = [[ORSettings shared] passwordForOPDSCatalog:catalog[@"id"] ?: @""] ?: @"";
-    NSString *authorization = [ORHTTP basicAuthorizationForUser:user password:password];
-    return @{@"Accept": @"application/atom+xml,application/xml,*/*",
-             @"Authorization": authorization};
+    if (user.length > 0) {
+        NSString *password = [[ORSettings shared] passwordForOPDSCatalog:catalog[@"id"] ?: @""] ?: @"";
+        headers[@"Authorization"] = [ORHTTP basicAuthorizationForUser:user password:password];
+    }
+    return headers;
+}
+
+/// Downloads are attempted anonymously by default; saved credentials are only
+/// attached when the user entered them explicitly for this catalog.
++ (NSDictionary *)downloadHeadersForCatalog:(NSDictionary *)catalog referer:(NSString *)referer {
+    NSMutableDictionary *headers =
+        [@{@"Accept": @"application/octet-stream,application/fb2+xml,application/epub+zip,"
+                       "application/zip,text/plain,*/*",
+           @"Accept-Language": @"ru,en;q=0.9",
+           @"User-Agent": [self browserUserAgent]} mutableCopy];
+    NSString *user = catalog[@"user"];
+    if (user.length > 0) {
+        NSString *password = [[ORSettings shared] passwordForOPDSCatalog:catalog[@"id"] ?: @""] ?: @"";
+        headers[@"Authorization"] = [ORHTTP basicAuthorizationForUser:user password:password];
+    }
+    if (referer.length > 0) {
+        headers[@"Referer"] = referer;
+    } else if ([catalog[@"url"] isKindOfClass:[NSString class]]) {
+        headers[@"Referer"] = catalog[@"url"];
+    }
+    return headers;
 }
 
 + (void)loadFeedAtURL:(NSString *)urlString
@@ -296,7 +401,7 @@
             }
         }
     }
-    // 3. Last resort: a link whose URL clearly points at a book file.
+    // 3. A link whose URL clearly points at a book file.
     if (!chosen) {
         NSArray<NSString *> *known = @[@"epub", @"fb2", @"pdf", @"txt", @"zip", @"cbz", @"cbr",
                                        @"mobi", @"azw", @"azw3", @"djvu", @"mp3", @"m4b", @"m4a", @"flac", @"ogg"];
@@ -304,6 +409,20 @@
             NSString *href = link[@"href"] ?: @"";
             NSString *extension = [NSURL URLWithString:href].path.pathExtension.lowercaseString;
             if ([known containsObject:extension]) {
+                chosen = link;
+                break;
+            }
+        }
+    }
+    // 4. A book page: download it once, then follow the file link it contains.
+    //    lib.rus.ec/flibusta OPDS entries often point at /b/<id>, not at the file.
+    if (!chosen) {
+        for (NSDictionary *link in links) {
+            NSString *href = link[@"href"] ?: @"";
+            NSString *path = [NSURL URLWithString:href].path ?: @"";
+            NSRange range = [path rangeOfString:@"/b/\\d+"
+                                        options:NSRegularExpressionSearch];
+            if (range.location != NSNotFound) {
                 chosen = link;
                 break;
             }
@@ -352,43 +471,75 @@
     }
     if (formatHint.length > 0 && formatHint.length <= 5) extension = formatHint;
 
-    __block BOOL followedLandingPage = NO;
+    NSMutableArray<NSString *> *candidates = [NSMutableArray arrayWithObject:href];
+    [candidates addObjectsFromArray:[self derivedDownloadURLsForURL:href]];
+
+    NSMutableSet<NSString *> *visited = [NSMutableSet set];
+    __block NSInteger hops = 0;
+    __block BOOL finished = NO;
+    __block NSError *lastError = nil;
+    __block void (^tryCandidate)(void) = nil;
     __block void (^attempt)(NSString *url, NSString *ext) = nil;
+
     attempt = ^(NSString *url, NSString *ext) {
+        if (finished || url.length == 0) return;
+        if ([visited containsObject:url]) {
+            if (tryCandidate) tryCandidate();
+            return;
+        }
+        [visited addObject:url];
         NSString *destination = [[ORPaths cacheDirectory] stringByAppendingPathComponent:
                                     [NSString stringWithFormat:@"opds-%@.%@", [ORUtil uniqueKey], ext]];
         [ORHTTP download:url
-                 headers:[self headersForCatalog:catalog]
+                 headers:[self downloadHeadersForCatalog:catalog referer:[self refererForURL:url]]
                   toPath:destination
               completion:^(NSString *path, NSError *error) {
+            if (finished) return;
             if (error) {
-                completion(nil, nil, error);
+                lastError = error;
+                if (tryCandidate) tryCandidate();
                 return;
             }
             // Catalogs often answer with an HTML page instead of the book (login
-            // wall, "file moved", anti-leech). Report it instead of importing junk.
+            // wall, "file moved", anti-leech, countdown). Follow the real link.
             NSError *validationError = [self validateDownloadedFile:path];
             if (!validationError) {
+                finished = YES;
                 NSString *base = entry[@"title"] ?: @"book";
                 completion(path, [NSString stringWithFormat:@"%@.%@", base, ext], nil);
                 return;
             }
-            // Some pages only hide the real file behind a "download" link.
-            // Follow such a link once, then give up with the original message.
+            lastError = validationError;
             NSData *payload = [NSData dataWithContentsOfFile:path
                                                      options:NSDataReadingMappedIfSafe
                                                        error:NULL];
             [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
-            NSString *next = followedLandingPage ? nil : [self downloadLinkInHTML:payload baseURL:url];
-            if (next.length > 0) {
-                followedLandingPage = YES;
+            NSString *next = [self downloadLinkInHTML:payload baseURL:url];
+            if (next.length > 0 && hops < 3 && ![visited containsObject:next]) {
+                hops += 1;
                 NSString *nextExtension = [NSURL URLWithString:next].path.pathExtension.lowercaseString;
                 attempt(next, [known containsObject:nextExtension] ? nextExtension : ext);
                 return;
             }
-            completion(nil, nil, validationError);
+            if (tryCandidate) tryCandidate();
         }];
     };
+
+    tryCandidate = ^{
+        if (finished) return;
+        if (candidates.count == 0) {
+            finished = YES;
+            completion(nil, nil, lastError ?: [NSError errorWithDomain:@"OmniReader.OPDS" code:3
+                                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                                            @"Не удалось скачать файл из каталога."}]);
+            return;
+        }
+        NSString *nextURL = candidates.firstObject;
+        [candidates removeObjectAtIndex:0];
+        NSString *nextExtension = [NSURL URLWithString:nextURL].path.pathExtension.lowercaseString;
+        attempt(nextURL, [known containsObject:nextExtension] ? nextExtension : extension);
+    };
+
     attempt(href, extension);
 }
 

@@ -1,6 +1,5 @@
 #import "OROPDSViewController.h"
 #import "ORBookImporter.h"
-#import "ORCatalogLogin.h"
 #import "ORCore.h"
 #import "OROPDS.h"
 #import "ORSettingsViewController.h"
@@ -88,11 +87,7 @@
     self.baseFeedURL = self.feedURL;
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
     UIBarButtonItem *spinnerItem = [[UIBarButtonItem alloc] initWithCustomView:self.spinner];
-    UIBarButtonItem *loginItem = [[UIBarButtonItem alloc] initWithTitle:@"Вход"
-                                                                 style:UIBarButtonItemStylePlain
-                                                                target:self
-                                                                action:@selector(catalogLoginTapped)];
-    self.navigationItem.rightBarButtonItems = @[loginItem, spinnerItem];
+    self.navigationItem.rightBarButtonItems = @[spinnerItem];
     self.tableView.refreshControl = [[UIRefreshControl alloc] init];
     [self.tableView.refreshControl addTarget:self action:@selector(loadFeed) forControlEvents:UIControlEventValueChanged];
 
@@ -273,7 +268,7 @@
         : @"В записи нет ссылок на файл.";
     [ORUtil presentAlertIn:self
                      title:@"Нет файла"
-                   message:[NSString stringWithFormat:@"%@\n\nЕсли это раздел — откройте его. Если каталог требует входа, добавьте логин и пароль в настройках каталога.", detail]];
+                   message:[NSString stringWithFormat:@"%@\n\nЕсли это раздел — откройте его. Если сайт не отдаёт файлы через OPDS, откройте книгу в Safari.", detail]];
 }
 
 - (void)downloadEntry:(NSDictionary *)entry {
@@ -315,60 +310,22 @@
     }];
 }
 
-#pragma mark - Catalog authentication
-
-- (void)catalogLoginTapped {
-    [self promptCatalogLoginForEntry:nil];
-}
-
-/// Opens the Basic-auth prompt and repeats whatever failed: the feed load or a
-/// single download. Catalogs such as lib.rus.ec hide files from guests, so the
-/// retry is the whole point of asking.
-- (void)promptCatalogLoginForEntry:(nullable NSDictionary *)entry {
-    __weak typeof(self) weakSelf = self;
-    [ORCatalogLogin presentIn:self catalog:self.catalog completion:^(NSDictionary *catalog, BOOL saved) {
-        __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf || !saved) return;
-        strongSelf.catalog = catalog;
-        if (entry) {
-            [strongSelf downloadEntry:entry];
-        } else {
-            [strongSelf loadFeed];
-        }
-    }];
-}
-
-- (BOOL)isAuthenticationError:(NSError *)error {
-    if (error.code == 401 || error.code == 403) return YES;
-    NSString *text = (error.localizedDescription ?: @"").lowercaseString;
-    return [text containsString:@"401"] || [text containsString:@"нужен вход"] ||
-           [text containsString:@"требуется вход"];
-}
+#pragma mark - Errors
 
 - (void)handleCatalogError:(nullable NSError *)error entry:(nullable NSDictionary *)entry {
     NSError *failure = error ?: [NSError errorWithDomain:@"OmniReader.OPDS" code:1
                                                userInfo:@{NSLocalizedDescriptionKey: @"Не удалось загрузить каталог."}];
-    BOOL auth = [self isAuthenticationError:failure];
     BOOL page = [failure.domain isEqualToString:@"OmniReader.OPDS"] && failure.code == 5;
-    if (!auth && !page) {
-        [ORUtil presentAlertIn:self title:@"OPDS" message:failure.localizedDescription];
-        return;
-    }
-    NSString *title = auth ? @"Нужен вход в каталог" : @"Каталог вернул страницу";
-    NSMutableString *message = [NSMutableString stringWithString:failure.localizedDescription ?: @""];
-    if (page) {
-        [message appendString:@"\n\nМожно войти в каталог и повторить попытку. Если сайт не отдаёт "
-                             "файлы через OPDS, откройте страницу в Safari, скачайте книгу и откройте "
-                             "файл в OmniReader."];
-    }
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
-                                                                   message:message
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:(page ? @"Каталог вернул страницу" : @"OPDS")
+                                                                   message:failure.localizedDescription
                                                             preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Войти и повторить"
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(UIAlertAction *action) {
-        [self promptCatalogLoginForEntry:entry];
-    }]];
+    if (entry) {
+        [alert addAction:[UIAlertAction actionWithTitle:@"Повторить"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *action) {
+            [self downloadEntry:entry];
+        }]];
+    }
     [alert addAction:[UIAlertAction actionWithTitle:@"Открыть в Safari"
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction *action) {

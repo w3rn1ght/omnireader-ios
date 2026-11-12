@@ -12,8 +12,17 @@
 | Документы | PDF (PDFKit), DOCX, XLSX, PPTX (нативное извлечение текста), DOC/XLS/PPT (QuickLook) |
 | Комиксы | CBZ; CBR — только если внутри ZIP |
 | Аудио | MP3, M4A, M4B, AAC, FLAC, WAV, прямые ссылки на поток |
-| Каталоги | OPDS 1.2 (Project Gutenberg, Calibre и т. п.), Basic Auth |
+| Каталоги | OPDS 1.2 (Project Gutenberg, Calibre, Либрусек), скачивание без входа |
 | Сервисы | Яндекс Книги: OAuth / токен, полка, загрузка книг и аудио |
+
+## Что нового в 1.4.3
+
+- OPDS-каталоги больше не требуют логин: книги скачиваются анонимно, как у гостя сайта;
+- загрузка подставляет `Referer` страницы книги, сохраняет cookie сессии и обходит
+  промежуточные страницы «Скачать» (ищет ссылку в `<a>`, `window.open`, `location.replace`, `<meta refresh>`);
+- для Либрусека/Флибусты автоматически пробуются прямые адреса `/b/<id>/download/?format=fb2.zip` и `?format=epub`;
+- если запись каталога ведёт на страницу книги `/b/<id>`, приложение открывает её как промежуточную и находит файл;
+- поля логина и пароля остались только для приватных серверов и полностью необязательны.
 
 ## Что нового в 1.1.0
 
@@ -81,7 +90,7 @@ make package FINALPACKAGE=1
 3. Или по SSH:
 
 ```sh
-dpkg -i com.w3rn1ght.omnireader_1.4.2_iphoneos-arm.deb
+dpkg -i com.w3rn1ght.omnireader_1.4.3_iphoneos-arm.deb
 uicache -p /Applications/OmniReader.app
 ```
 
