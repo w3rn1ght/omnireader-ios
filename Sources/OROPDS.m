@@ -19,7 +19,9 @@
 + (NSArray<NSString *> *)derivedDownloadURLsForURL:(NSString *)entryURL;
 + (NSString *)refererForURL:(NSString *)urlString;
 + (NSString *)browserUserAgent;
-+ (NSDictionary *)downloadHeadersForCatalog:(nullable NSDictionary *)catalog referer:(nullable NSString *)referer;
++ (NSDictionary *)downloadHeadersForCatalog:(nullable NSDictionary *)catalog
+                             referer:(nullable NSString *)referer
+                   includeCredentials:(BOOL)includeCredentials;
 @end
 
 @implementation OROPDS
@@ -216,14 +218,16 @@
 
 /// Downloads are attempted anonymously by default; saved credentials are only
 /// attached when the user entered them explicitly for this catalog.
-+ (NSDictionary *)downloadHeadersForCatalog:(NSDictionary *)catalog referer:(NSString *)referer {
++ (NSDictionary *)downloadHeadersForCatalog:(NSDictionary *)catalog
+                                      referer:(NSString *)referer
+                            includeCredentials:(BOOL)includeCredentials {
     NSMutableDictionary *headers =
         [@{@"Accept": @"application/octet-stream,application/fb2+xml,application/epub+zip,"
                        "application/zip,text/plain,*/*",
            @"Accept-Language": @"ru,en;q=0.9",
            @"User-Agent": [self browserUserAgent]} mutableCopy];
     NSString *user = catalog[@"user"];
-    if (user.length > 0) {
+    if (includeCredentials && user.length > 0) {
         NSString *password = [[ORSettings shared] passwordForOPDSCatalog:catalog[@"id"] ?: @""] ?: @"";
         headers[@"Authorization"] = [ORHTTP basicAuthorizationForUser:user password:password];
     }
@@ -479,23 +483,36 @@
     __block BOOL finished = NO;
     __block NSError *lastError = nil;
     __block void (^tryCandidate)(void) = nil;
-    __block void (^attempt)(NSString *url, NSString *ext) = nil;
+    __block void (^attempt)(NSString *url, NSString *ext, BOOL includeCredentials) = nil;
 
-    attempt = ^(NSString *url, NSString *ext) {
+    attempt = ^(NSString *url, NSString *ext, BOOL includeCredentials) {
         if (finished || url.length == 0) return;
-        if ([visited containsObject:url]) {
+        // The credential retry targets the same URL, so key the visited set by
+        // authentication mode to let it through exactly once.
+        NSString *visitKey = includeCredentials ? [@"auth:" stringByAppendingString:url] : url;
+        if ([visited containsObject:visitKey]) {
             if (tryCandidate) tryCandidate();
             return;
         }
-        [visited addObject:url];
+        [visited addObject:visitKey];
         NSString *destination = [[ORPaths cacheDirectory] stringByAppendingPathComponent:
                                     [NSString stringWithFormat:@"opds-%@.%@", [ORUtil uniqueKey], ext]];
         [ORHTTP download:url
-                 headers:[self downloadHeadersForCatalog:catalog referer:[self refererForURL:url]]
+                 headers:[self downloadHeadersForCatalog:catalog
+                                                  referer:[self refererForURL:url]
+                                        includeCredentials:includeCredentials]
                   toPath:destination
               completion:^(NSString *path, NSError *error) {
             if (finished) return;
             if (error) {
+                // Anonymous attempt failed with an auth status: retry once with
+                // saved credentials if the user actually entered them.
+                NSString *user = catalog[@"user"];
+                BOOL authFailure = (error.code == 401 || error.code == 403);
+                if (authFailure && !includeCredentials && user.length > 0) {
+                    attempt(url, ext, YES);
+                    return;
+                }
                 lastError = error;
                 if (tryCandidate) tryCandidate();
                 return;
@@ -518,7 +535,7 @@
             if (next.length > 0 && hops < 3 && ![visited containsObject:next]) {
                 hops += 1;
                 NSString *nextExtension = [NSURL URLWithString:next].path.pathExtension.lowercaseString;
-                attempt(next, [known containsObject:nextExtension] ? nextExtension : ext);
+                attempt(next, [known containsObject:nextExtension] ? nextExtension : ext, includeCredentials);
                 return;
             }
             if (tryCandidate) tryCandidate();
@@ -537,10 +554,10 @@
         NSString *nextURL = candidates.firstObject;
         [candidates removeObjectAtIndex:0];
         NSString *nextExtension = [NSURL URLWithString:nextURL].path.pathExtension.lowercaseString;
-        attempt(nextURL, [known containsObject:nextExtension] ? nextExtension : extension);
+        attempt(nextURL, [known containsObject:nextExtension] ? nextExtension : extension, NO);
     };
 
-    attempt(href, extension);
+    attempt(href, extension, NO);
 }
 
 + (void)resolveSearchURLForFeed:(NSDictionary *)feed
