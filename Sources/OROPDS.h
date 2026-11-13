@@ -23,6 +23,10 @@ typedef void (^OROPDSDownloadCompletion)(NSString *_Nullable path, NSString *_Nu
                           query:(NSString *)query
                      completion:(void (^)(NSString *_Nullable url, NSError *_Nullable error))completion;
 
+/// YES for sites that are parsed from HTML (so.11klasov.net): the browser
+/// filters those feeds locally instead of asking the server for a search URL.
++ (BOOL)isHTMLCatalogURL:(NSString *)urlString;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -1,6 +1,8 @@
 #import "ORReaderFactory.h"
 #import "ORAudioPlayerController.h"
 #import "ORComicReaderController.h"
+#import "ORDJVU.h"
+#import "ORDJVUReaderController.h"
 #import "OREPUB.h"
 #import "ORFB2.h"
 #import "ORMOBI.h"
@@ -60,10 +62,8 @@
             return;
         }
         case ORBookFormatDJVU: {
-            completion(nil, [NSError errorWithDomain:@"OmniReader.Reader" code:2
-                                           userInfo:@{NSLocalizedDescriptionKey:
-                                                          @"DJVU пока не поддерживается. Можно конвертировать в PDF или открыть в другом приложении."}]);
-            return;
+            // Parsed off the main thread together with the other text formats.
+            break;
         }
         default:
             break;
@@ -115,6 +115,26 @@
                                                                       extraCSS:mobi.extraCSS
                                                                       basePath:mobi.rootDirectory
                                                                            toc:mobi.toc];
+                }
+                break;
+            }
+            case ORBookFormatDJVU: {
+                if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+                    error = [self missingFileError];
+                    break;
+                }
+                ORDJVUDocument *document = [ORDJVUDocument documentAtPath:path error:&error];
+                if (document.hasTextLayer) {
+                    controller = [[ORPagedReaderController alloc]
+                        initWithBook:book
+                                body:[document combinedHTML]
+                            extraCSS:[ORDJVUDocument readerCSS]
+                            basePath:nil
+                                 toc:@[]];
+                } else if (document) {
+                    controller = [[ORDJVUReaderController alloc] initWithBook:book
+                                                                    pageCount:document.pageCount];
+                    error = nil;
                 }
                 break;
             }

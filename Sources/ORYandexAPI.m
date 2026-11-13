@@ -28,6 +28,10 @@
            completion:(void (^)(id _Nullable data, NSError *_Nullable error))completion;
 + (NSString *)myBooksQuery;
 + (void)fetchViewerProfile:(void (^)(NSDictionary *_Nullable profile, NSError *_Nullable error))completion;
++ (void)fetchLoginProfileDictionary:(void (^)(NSDictionary *_Nullable profile, NSError *_Nullable error))completion;
++ (void)probeProfileRoots:(NSArray<NSString *> *)roots
+                    index:(NSUInteger)index
+               completion:(void (^)(NSDictionary *_Nullable profile, NSError *_Nullable error))completion;
 + (void)fetchLibraryCardsForLogin:(NSString *)login
                             cursor:(NSString *)cursor
                        accumulated:(NSMutableArray *)accumulated
@@ -142,10 +146,12 @@
                                       @"Content-Type": @"application/json",
                                       @"Accept": @"application/json"} mutableCopy];
     if (operationName.length > 0) headers[@"x-apollo-operation-name"] = operationName;
+    // The web application always sends these; the BFF now uses them while
+    // resolving the language-dependent profile fields.
+    headers[@"App-Language"] = @"ru";
+    headers[@"accept-language"] = @"ru,en;q=0.9";
     if ([path isEqualToString:[self libraryPath]]) {
         // p-graphql inspects these headers when resolving the private schema.
-        headers[@"App-Language"] = @"ru";
-        headers[@"accept-language"] = @"ru,en;q=0.9";
         headers[@"user-is-authorized"] = @"true";
         headers[@"allow-ppd-content"] = @"true";
     }
@@ -335,6 +341,14 @@
 }
 
 + (void)fetchLoginProfile:(ORYandexProfileCompletion)completion {
+    [self fetchLoginProfileDictionary:^(NSDictionary *dictionary, NSError *error) {
+        NSString *name = [self firstStringIn:dictionary keys:@[@"display_name", @"real_name", @"login"]];
+        completion(name, error);
+    }];
+}
+
++ (void)fetchLoginProfileDictionary:(void (^)(NSDictionary *, NSError *))completion {
+    if (!completion) return;
     NSString *token = [ORSettings shared].yandexToken;
     if (token.length == 0) {
         completion(nil, [NSError errorWithDomain:@"OmniReader.Yandex" code:401
@@ -352,9 +366,13 @@
             return;
         }
         id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
-        NSDictionary *dictionary = [json isKindOfClass:[NSDictionary class]] ? json : @{};
-        NSString *name = [self firstStringIn:dictionary keys:@[@"display_name", @"real_name", @"login"]];
-        completion(name, nil);
+        NSDictionary *dictionary = [json isKindOfClass:[NSDictionary class]] ? json : nil;
+        if (!dictionary) {
+            completion(nil, [NSError errorWithDomain:@"OmniReader.Yandex" code:500
+                                           userInfo:@{NSLocalizedDescriptionKey: @"login.yandex.ru вернул не JSON"}]);
+            return;
+        }
+        completion(dictionary, nil);
     }];
 }
 
@@ -500,7 +518,7 @@
             NSLog(@"[OmniReader] Yandex shelf: profile unavailable (%@)", error.localizedDescription ?: @"empty");
             completion(nil, error ?: [NSError errorWithDomain:@"OmniReader.Yandex" code:401
                                                     userInfo:@{NSLocalizedDescriptionKey:
-                                                                   @"Яндекс не вернул профиль Книг. Проверьте токен."}]);
+                                                                   @"Яндекс не вернул профиль Книг. Проверьте токен и доступ OAuth-приложения к сервису «Книги»."}]);
             return;
         }
         [self fetchLibraryCardsForLogin:login
@@ -522,17 +540,69 @@
 }
 
 + (void)fetchViewerProfile:(void (^)(NSDictionary *, NSError *))completion {
-    NSString *query = @"query Viewer { userProfile { login id name yuid email avatar { small large } } }";
-    [self graphql:query variables:nil completion:^(id data, NSError *error) {
-        NSDictionary *profile = [data isKindOfClass:[NSDictionary class]] ? data[@"userProfile"] : nil;
+    if (!completion) return;
+    // Yandex has renamed the root field before. Try the documented one first,
+    // then the historical shapes, and finally the stable login endpoint.
+    NSArray<NSString *> *roots = @[@"userProfile", @"viewer", @"me", @"currentUser", @"user", @"profile"];
+    [self probeProfileRoots:roots index:0 completion:^(NSDictionary *profile, NSError *error) {
         if ([profile isKindOfClass:[NSDictionary class]] && profile.count > 0) {
-            [self setCachedViewerRoot:@"userProfile"];
             completion(profile, nil);
             return;
         }
-        completion(nil, error ?: [NSError errorWithDomain:@"OmniReader.Yandex" code:401
-                                                userInfo:@{NSLocalizedDescriptionKey:
-                                                               @"Токен принят, но профиль Книг пуст (нет доступа к аккаунту Books)."}]);
+        // The BFF answers 200 with a `null` root when the OAuth application has
+        // no Books grant. login.yandex.ru accepts the same token and still
+        // returns the login needed for the shelf query.
+        [self fetchLoginProfileDictionary:^(NSDictionary *loginProfile, NSError *loginError) {
+            NSString *login = [self firstStringIn:loginProfile keys:@[@"login"]];
+            if (login.length > 0) {
+                NSMutableDictionary *merged = [loginProfile mutableCopy];
+                NSString *name = [self firstStringIn:loginProfile keys:@[@"display_name", @"real_name", @"login"]];
+                if (name.length > 0) merged[@"name"] = name;
+                [self setCachedViewerRoot:@"login.yandex.ru"];
+                NSLog(@"[OmniReader] Yandex profile: BFF roots empty, using login.yandex.ru (%@)", login);
+                completion(merged, nil);
+                return;
+            }
+            NSString *detail = error.localizedDescription ?: loginError.localizedDescription ?: @"пустой ответ";
+            NSString *message = [NSString stringWithFormat:
+                @"Яндекс принял токен, но не отдал профиль Книг.\n\n"
+                 "Обычно это значит, что у OAuth-приложения нет доступа к сервису "
+                 "«Книги» (нужно отдельное разрешение) или токен выпущен для другого "
+                 "client_id.\n\nОтвет сервера: %@", detail];
+            completion(nil, [NSError errorWithDomain:@"OmniReader.Yandex" code:401
+                                           userInfo:@{NSLocalizedDescriptionKey: message}]);
+        }];
+    }];
+}
+
++ (void)probeProfileRoots:(NSArray<NSString *> *)roots
+                    index:(NSUInteger)index
+               completion:(void (^)(NSDictionary *, NSError *))completion {
+    if (index >= roots.count) {
+        completion(nil, [NSError errorWithDomain:@"OmniReader.Yandex" code:404
+                                       userInfo:@{NSLocalizedDescriptionKey:
+                                                      @"Профиль Книг не найден"}]);
+        return;
+    }
+    NSString *root = roots[index];
+    NSString *fields = @"login id name";
+    if ([root isEqualToString:@"userProfile"]) {
+        fields = @"login id name yuid email avatar { small large }";
+    } else if ([root isEqualToString:@"viewer"] || [root isEqualToString:@"user"] ||
+               [root isEqualToString:@"profile"]) {
+        fields = @"login id name avatar { small large }";
+    }
+    NSString *query = [NSString stringWithFormat:@"query Viewer { %@ { %@ } }", root, fields];
+    [self graphql:query variables:nil completion:^(id data, NSError *error) {
+        NSDictionary *profile = [data isKindOfClass:[NSDictionary class]] ? data[root] : nil;
+        if ([profile isKindOfClass:[NSDictionary class]] && profile.count > 0) {
+            [self setCachedViewerRoot:root];
+            NSLog(@"[OmniReader] Yandex profile root = %@", root);
+            completion(profile, nil);
+            return;
+        }
+        NSLog(@"[OmniReader] Yandex profile root '%@' empty: %@", root, error.localizedDescription ?: @"null");
+        [self probeProfileRoots:roots index:index + 1 completion:completion];
     }];
 }
 

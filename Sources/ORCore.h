@@ -70,6 +70,9 @@ typedef NS_ENUM(NSInteger, ORPageDirection) {
 @property (nonatomic) double progress;                // 0...1
 @property (nonatomic, copy) NSArray<NSString *> *collections;
 @property (nonatomic, copy) NSArray<NSDictionary *> *bookmarks;
+/// Hidden books stay in the library but are excluded from the general pool;
+/// they remain reachable through their folder and the "Скрытые" view.
+@property (nonatomic) BOOL hidden;
 
 - (instancetype)initWithDictionary:(NSDictionary *)dictionary;
 - (NSDictionary *)dictionaryRepresentation;
@@ -172,6 +175,11 @@ typedef NS_ENUM(NSInteger, ORPageDirection) {
 - (void)removeOPDSCatalogWithID:(NSString *)catalogID;
 - (void)setPassword:(nullable NSString *)password forOPDSCatalog:(NSString *)catalogID;
 - (nullable NSString *)passwordForOPDSCatalog:(NSString *)catalogID;
+
+/// User-created book folders (mirrored on each book's `collections`).
+- (NSArray<NSString *> *)bookFolders;
+- (void)addBookFolder:(NSString *)name;
+- (void)removeBookFolder:(NSString *)name;
 
 - (void)synchronize;
 

@@ -52,6 +52,7 @@ static NSString *ORYandexTokenCache = nil;
     if ([dictionary[@"bookmarks"] isKindOfClass:[NSArray class]]) {
         _bookmarks = dictionary[@"bookmarks"];
     }
+    if (dictionary[@"hidden"]) _hidden = [dictionary[@"hidden"] boolValue];
     if (_title.length == 0) _title = @"Без названия";
     return self;
 }
@@ -72,6 +73,7 @@ static NSString *ORYandexTokenCache = nil;
     if (self.remoteID) dict[@"remoteID"] = self.remoteID;
     if (self.audioURL) dict[@"audioURL"] = self.audioURL;
     if (self.lastOpenedAt) dict[@"lastOpenedAt"] = @([self.lastOpenedAt timeIntervalSince1970]);
+    if (self.hidden) dict[@"hidden"] = @YES;
     return dict;
 }
 
@@ -618,6 +620,35 @@ static NSString *ORYandexTokenCache = nil;
 - (NSString *)passwordForOPDSCatalog:(NSString *)catalogID {
     if (catalogID.length == 0) return nil;
     return [ORKeychain stringForKey:[NSString stringWithFormat:@"opds.%@", catalogID]];
+}
+
+#pragma mark Book folders
+
+- (NSArray<NSString *> *)bookFolders {
+    id value = [self.defaults arrayForKey:@"or.bookFolders"];
+    if (![value isKindOfClass:[NSArray class]]) return @[];
+    NSMutableArray<NSString *> *folders = [NSMutableArray array];
+    for (id entry in (NSArray *)value) {
+        if (![entry isKindOfClass:[NSString class]] || [entry length] == 0) continue;
+        if (![folders containsObject:entry]) [folders addObject:entry];
+    }
+    return folders;
+}
+
+- (void)addBookFolder:(NSString *)name {
+    if (name.length == 0) return;
+    NSMutableArray<NSString *> *folders = [[self bookFolders] mutableCopy];
+    if (![folders containsObject:name]) {
+        [folders addObject:name];
+        [self.defaults setObject:folders forKey:@"or.bookFolders"];
+    }
+}
+
+- (void)removeBookFolder:(NSString *)name {
+    if (name.length == 0) return;
+    NSMutableArray<NSString *> *folders = [[self bookFolders] mutableCopy];
+    [folders removeObject:name];
+    [self.defaults setObject:folders forKey:@"or.bookFolders"];
 }
 
 - (void)synchronize {

@@ -13,6 +13,7 @@
 #import "ORYandexViewController.h"
 
 static NSString *const ORLibrarySortKey = @"or.librarySort";
+static NSString *const ORHiddenFolderKey = @"__or_hidden__";
 
 #pragma mark - Book cell
 
@@ -197,6 +198,7 @@ static NSString *const ORLibrarySortKey = @"or.librarySort";
 @property (nonatomic, copy) NSString *searchText;
 @property (nonatomic) NSInteger filterIndex;
 @property (nonatomic) NSInteger sortIndex;
+@property (nonatomic, copy, nullable) NSString *folderFilter;
 @property (nonatomic, strong) UISearchController *searchController;
 @property (nonatomic, strong) ORMiniPlayerView *miniPlayer;
 @property (nonatomic, strong) UIActivityIndicatorView *importSpinner;
@@ -255,8 +257,12 @@ static NSString *const ORLibrarySortKey = @"or.librarySort";
                                                                 style:UIBarButtonItemStylePlain
                                                                target:self
                                                                action:@selector(showSettings)];
+    UIBarButtonItem *folders = [[UIBarButtonItem alloc] initWithTitle:@"📁"
+                                                               style:UIBarButtonItemStylePlain
+                                                              target:self
+                                                              action:@selector(showFoldersMenu)];
     self.navigationItem.rightBarButtonItems = @[add, sort];
-    self.navigationItem.leftBarButtonItem = settings;
+    self.navigationItem.leftBarButtonItems = @[settings, folders];
 
     self.searchController = [[UISearchController alloc] initWithSearchResultsController:nil];
     self.searchController.searchResultsUpdater = self;
@@ -370,7 +376,20 @@ static NSString *const ORLibrarySortKey = @"or.librarySort";
     NSMutableArray *filtered = [NSMutableArray array];
     NSString *query = self.searchText.lowercaseString;
 
+    BOOL hiddenView = [self.folderFilter isEqualToString:ORHiddenFolderKey];
+    BOOL folderView = self.folderFilter.length > 0 && !hiddenView;
+
     for (ORBook *book in all) {
+        // Folder / hidden-pool filtering. Hidden books stay out of the general
+        // pool but remain visible inside their folder and in "Скрытые".
+        if (hiddenView) {
+            if (!book.hidden) continue;
+        } else if (folderView) {
+            if (![book.collections containsObject:self.folderFilter]) continue;
+        } else if (book.hidden) {
+            continue;
+        }
+
         if (self.filterIndex == 1) {
             if (book.isAudio || book.isOffice) continue;
             if (book.format == ORBookFormatPDF) {
@@ -405,6 +424,16 @@ static NSString *const ORLibrarySortKey = @"or.librarySort";
     [self.visibleBooks setArray:filtered];
     [self.collectionView reloadData];
     self.emptyLabel.hidden = self.visibleBooks.count > 0;
+    if (hiddenView) {
+        self.title = @"Скрытые";
+        self.emptyLabel.text = @"Скрытых книг нет.";
+    } else if (folderView) {
+        self.title = self.folderFilter;
+        self.emptyLabel.text = @"В этой папке пусто.\nУдерживайте книгу, чтобы переместить её сюда.";
+    } else {
+        self.title = @"Библиотека";
+        self.emptyLabel.text = @"Здесь пока пусто.\nНажмите +, чтобы добавить книгу.";
+    }
 }
 
 - (void)filterChanged {
@@ -476,6 +505,130 @@ static NSString *const ORLibrarySortKey = @"or.librarySort";
     }
 }
 
+#pragma mark - Folders
+
+- (NSArray<NSString *> *)allFolders {
+    NSMutableArray<NSString *> *folders = [[[ORSettings shared] bookFolders] mutableCopy];
+    if (!folders) folders = [NSMutableArray array];
+    for (ORBook *book in [ORLibrary shared].books) {
+        for (NSString *name in book.collections) {
+            if (name.length > 0 && ![folders containsObject:name]) [folders addObject:name];
+        }
+    }
+    return folders;
+}
+
+- (NSUInteger)hiddenBookCount {
+    NSUInteger count = 0;
+    for (ORBook *book in [ORLibrary shared].books) {
+        if (book.hidden) count++;
+    }
+    return count;
+}
+
+- (void)showFoldersMenu {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Папки"
+                                                                  message:nil
+                                                           preferredStyle:UIAlertControllerStyleActionSheet];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Все книги" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        self.folderFilter = nil;
+        [self reloadBooks];
+    }]];
+    for (NSString *folder in [self allFolders]) {
+        NSString *title = [folder isEqualToString:self.folderFilter] ? [folder stringByAppendingString:@" ✓"] : folder;
+        [sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            self.folderFilter = folder;
+            [self reloadBooks];
+        }]];
+    }
+    NSUInteger hidden = [self hiddenBookCount];
+    [sheet addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"Скрытые (%lu)", (unsigned long)hidden]
+                                              style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        self.folderFilter = ORHiddenFolderKey;
+        [self reloadBooks];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Новая папка…" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self promptNewFolderWithCompletion:^(NSString *name) {
+            self.folderFilter = name;
+            [self reloadBooks];
+        }];
+    }]];
+    BOOL folderView = self.folderFilter.length > 0 && ![self.folderFilter isEqualToString:ORHiddenFolderKey];
+    if (folderView) {
+        NSString *folder = self.folderFilter;
+        [sheet addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"Удалить папку «%@»", folder]
+                                                  style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+            [self removeFolder:folder];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Отмена" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.barButtonItem = self.navigationItem.leftBarButtonItems.lastObject;
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)promptNewFolderWithCompletion:(void (^)(NSString *name))completion {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Новая папка"
+                                                                  message:nil
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.placeholder = @"Название папки";
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Создать" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *name = [alert.textFields.firstObject.text
+                          stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (name.length == 0) return;
+        [[ORSettings shared] addBookFolder:name];
+        if (completion) completion(name);
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Отмена" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)promptFolderForBook:(ORBook *)book {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Переместить в папку"
+                                                                  message:book.title
+                                                           preferredStyle:UIAlertControllerStyleActionSheet];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Без папки" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        book.collections = @[];
+        [[ORLibrary shared] updateBook:book];
+        [self reloadBooks];
+    }]];
+    for (NSString *folder in [self allFolders]) {
+        [sheet addAction:[UIAlertAction actionWithTitle:folder style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            book.collections = @[folder];
+            [[ORSettings shared] addBookFolder:folder];
+            [[ORLibrary shared] updateBook:book];
+            [self reloadBooks];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Новая папка…" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self promptNewFolderWithCompletion:^(NSString *name) {
+            book.collections = @[name];
+            [[ORLibrary shared] updateBook:book];
+            [self reloadBooks];
+        }];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Отмена" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.sourceView = self.view;
+    sheet.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width / 2,
+                                                               self.view.bounds.size.height / 2, 1, 1);
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)removeFolder:(NSString *)folder {
+    if (folder.length == 0) return;
+    [[ORSettings shared] removeBookFolder:folder];
+    for (ORBook *book in [ORLibrary shared].books) {
+        if (![book.collections containsObject:folder]) continue;
+        NSMutableArray<NSString *> *next = [book.collections mutableCopy];
+        [next removeObject:folder];
+        book.collections = next;
+    }
+    [[ORLibrary shared] save];
+    self.folderFilter = nil;
+    [self reloadBooks];
+}
+
 #pragma mark - Context menu
 
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
@@ -490,6 +643,15 @@ static NSString *const ORLibrarySortKey = @"or.librarySort";
                                                            preferredStyle:UIAlertControllerStyleActionSheet];
     [sheet addAction:[UIAlertAction actionWithTitle:@"Открыть" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         [self openBook:book];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Переместить в папку…" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self promptFolderForBook:book];
+    }]];
+    NSString *hideTitle = book.hidden ? @"Показать в общем списке" : @"Скрыть из общего списка";
+    [sheet addAction:[UIAlertAction actionWithTitle:hideTitle style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        book.hidden = !book.hidden;
+        [[ORLibrary shared] updateBook:book];
+        [self reloadBooks];
     }]];
     if (!book.isAudio && book.audioURL.length == 0) {
         [sheet addAction:[UIAlertAction actionWithTitle:@"Поделиться файлом" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {

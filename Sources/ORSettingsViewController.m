@@ -122,7 +122,7 @@
     } else {
         if (indexPath.row == 0) {
             cell.textLabel.text = @"Версия";
-            cell.detailTextLabel.text = @"1.4.4";
+            cell.detailTextLabel.text = @"1.4.5";
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
         } else if (indexPath.row == 1) {
             cell.textLabel.text = @"Поддерживаемые форматы";
@@ -222,7 +222,7 @@
     if (indexPath.section == 4) {
         if (indexPath.row == 1) {
             [ORUtil presentAlertIn:self title:@"Форматы"
-                            message:@"Книги: EPUB, FB2 (в том числе FB2.zip), MOBI, AZW/AZW3 (без DRM), TXT, Markdown, HTML, CBZ, CBR (RAR не встроен).\n\nДокументы: PDF, DOCX, XLSX, PPTX (нативно), DOC/XLS/PPT (через QuickLook).\n\nАудио: MP3, M4A, M4B, AAC, FLAC, WAV; потоковые URL.\n\nDJVU не поддерживается."];
+                            message:@"Книги: EPUB, FB2 (в том числе FB2.zip), MOBI, AZW/AZW3 (без DRM), TXT, Markdown, HTML, CBZ, CBR (RAR не встроен).\n\nДокументы: PDF, DOCX, XLSX, PPTX (нативно), DOC/XLS/PPT (через QuickLook), DjVu (текстовый слой; сканы без распознавания открываются во внешнем просмотрщике).\n\nАудио: MP3, M4A, M4B, AAC, FLAC, WAV; потоковые URL."];
         } else if (indexPath.row == 2) {
             [ORUtil presentAlertIn:self title:@"Правовая информация"
                             message:@"OmniReader — локальный просмотрщик. Приложение не содержит контента и не обходит DRM. Яндекc Книги — сторонний сервис: используйте только свой аккаунт и соблюдайте условия сервиса. Все права на книги принадлежат их правообладателям."];

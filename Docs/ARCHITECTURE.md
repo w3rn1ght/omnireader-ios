@@ -10,6 +10,7 @@ UI (UIKit)
  ├─ ORPDFReaderController        PDFKit
  ├─ OROfficeReaderController     QuickLook + текстовый фолбэк
  ├─ ORComicReaderController      CBZ
+ ├─ ORDJVUReaderController       DjVu без текстового слоя (объяснение + внешний просмотр)
  ├─ ORAudioPlayerController      UI аудиоплеера
  ├─ ORYandexViewController       полка Яндекса
  └─ OROPDSViewController         каталоги OPDS
@@ -27,6 +28,7 @@ UI (UIKit)
  ├─ ORFB2         XML → HTML, base64-изображения на диск
  ├─ ORMOBI        PalmDB + PalmDOC, EXTH
  ├─ ORPlainTextBook TXT/HTML/Markdown
+ ├─ ORDJVU        IFF (DJVU/DJVM) → ZP/BZZ → текстовый слой TXTz/TXTa → HTML
  └─ OROfficeText  DOCX/XLSX/PPTX → HTML
 
 Инфраструктура
@@ -67,6 +69,29 @@ UI (UIKit)
 ## Прогресс
 
 Хранится как доля 0…1 в `ORBook.progress` (`library.json`). Для текста — номер страницы / (всего−1), для PDF — индекс страницы, для аудио — время / длительность, для комиксов — индекс изображения.
+
+## DjVu
+
+`ORDJVU` разбирает IFF-контейнер (`FORM:DJVU` / `FORM:DJVM`), читает `INFO` и
+скрытый текстовый слой `TXTz`/`TXTa`. Кодек ZP и распаковщик BZZ — порт
+MIT-библиотеки DejaView (таблицы — из MIT DjvuNet), без кода GPL djvulibre.
+
+- `TXTz` распаковывается BZZ, `TXTa` читается как есть; смещения в дереве зон —
+  **байтовые** (UTF-8), поэтому абзацы вырезаются через `NSData`, а не
+  `NSString`;
+- дерево зон даёт абзацы; если его нет, абзацы делятся по пустым строкам;
+- порядок страниц берётся из `DIRM`, только если каталог встроенный
+  (`version & 0x80`) и все смещения совпадают с заголовками `FORM:DJVU`;
+- картинки страниц не декодируются (нужен IW44/JB2). Если текстового слоя нет,
+  открывается `ORDJVUReaderController` с объяснением, «Открыть в другом
+  приложении» и «Поделиться файлом».
+
+## Папки и скрытые книги
+
+`ORBook.collections` хранит имена папок (массив строк), список папок — в
+`ORSettings.bookFolders` (`or.bookFolders`). `ORBook.hidden` исключает книгу из
+общего списка, но не из папки: в библиотеке есть отдельный фильтр «Скрытые».
+Перемещение — долгое нажатие на книгу → «Переместить в папку…», скрытие — там же.
 
 ## Файлы на устройстве
 

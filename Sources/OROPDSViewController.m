@@ -10,6 +10,7 @@
 @property (nonatomic, copy) NSString *feedTitle;
 @property (nonatomic, strong, nullable) NSDictionary *catalog;
 @property (nonatomic, strong) NSArray<NSDictionary *> *entries;
+@property (nonatomic, strong) NSArray<NSDictionary *> *baseEntries;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic) BOOL loading;
 @property (nonatomic, strong) UISearchController *searchController;
@@ -25,23 +26,28 @@
 + (void)presentPickerFrom:(UIViewController *)presenter {
     if (!presenter) return;
     NSArray<NSDictionary *> *catalogs = [ORSettings shared].opdsCatalogs;
-    if (catalogs.count == 0) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Каталоги OPDS"
-                                                                      message:@"Сначала добавьте каталог в настройках. Подойдёт любой OPDS-каталог, например Project Gutenberg или ваш Calibre-сервер."
-                                                               preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"Настройки" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            ORSettingsViewController *settings = [[ORSettingsViewController alloc] init];
-            [presenter.navigationController pushViewController:settings animated:YES];
-        }]];
-        [alert addAction:[UIAlertAction actionWithTitle:@"Отмена" style:UIAlertActionStyleCancel handler:nil]];
-        [presenter presentViewController:alert animated:YES completion:nil];
-        return;
+    NSMutableArray<NSDictionary *> *available = [NSMutableArray arrayWithArray:catalogs ?: @[]];
+
+    // The school-textbook site has no OPDS feed; the app parses its HTML. Keep
+    // it one tap away so the feature works without visiting settings.
+    BOOL hasSchoolCatalog = NO;
+    for (NSDictionary *catalog in available) {
+        NSString *url = catalog[@"url"];
+        if ([url isKindOfClass:[NSString class]] && [OROPDS isHTMLCatalogURL:url]) {
+            hasSchoolCatalog = YES;
+            break;
+        }
+    }
+    if (!hasSchoolCatalog) {
+        [available addObject:@{@"id": @"builtin.11klasov",
+                               @"name": @"Школьные учебники (11klasov.net)",
+                               @"url": @"https://so.11klasov.net/"}];
     }
 
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Каталоги OPDS"
                                                                   message:nil
                                                            preferredStyle:UIAlertControllerStyleActionSheet];
-    for (NSDictionary *catalog in catalogs) {
+    for (NSDictionary *catalog in available) {
         NSString *name = catalog[@"name"] ?: catalog[@"url"] ?: @"Каталог";
         [sheet addAction:[UIAlertAction actionWithTitle:name style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             [self presentCatalog:catalog from:presenter];
@@ -128,6 +134,7 @@
             ? [NSString stringWithFormat:@"Поиск: %@", query]
             : feedName;
         strongSelf.entries = feed[@"entries"] ?: @[];
+        strongSelf.baseEntries = strongSelf.entries;
         [strongSelf.tableView reloadData];
     }];
 }
@@ -147,6 +154,10 @@
 }
 
 - (void)performSearch:(NSString *)query {
+    if ([OROPDS isHTMLCatalogURL:self.baseFeedURL]) {
+        [self applyLocalSearch:query];
+        return;
+    }
     if (query.length == 0) {
         self.searchBaseFeed = nil;
         [self loadFeedURL:self.baseFeedURL searchQuery:nil];
@@ -175,6 +186,29 @@
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     return (NSInteger)self.entries.count;
+}
+
+/// HTML catalogs have no server-side search endpoint that accepts ?q=; filter
+/// the page already downloaded instead.
+- (void)applyLocalSearch:(NSString *)query {
+    NSArray<NSDictionary *> *all = self.baseEntries ?: self.lastFeed[@"entries"] ?: @[];
+    if (self.baseEntries.count == 0) self.baseEntries = all;
+    if (query.length == 0) {
+        self.entries = all;
+        self.title = self.lastFeed[@"title"] ?: self.feedTitle;
+        [self.tableView reloadData];
+        return;
+    }
+    NSString *needle = query.lowercaseString;
+    NSMutableArray<NSDictionary *> *filtered = [NSMutableArray array];
+    for (NSDictionary *entry in all) {
+        NSString *haystack = [NSString stringWithFormat:@"%@ %@ %@",
+                              entry[@"title"] ?: @"", entry[@"author"] ?: @"", entry[@"summary"] ?: @""];
+        if ([haystack.lowercaseString containsString:needle]) [filtered addObject:entry];
+    }
+    self.entries = filtered;
+    self.title = [NSString stringWithFormat:@"Поиск: %@", query];
+    [self.tableView reloadData];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {

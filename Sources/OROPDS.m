@@ -22,6 +22,11 @@
 + (NSDictionary *)downloadHeadersForCatalog:(nullable NSDictionary *)catalog
                              referer:(nullable NSString *)referer
                    includeCredentials:(BOOL)includeCredentials;
++ (BOOL)isHTMLCatalogURL:(NSString *)urlString;
++ (nullable NSDictionary *)feedFromHTMLCatalogData:(NSData *)data baseURL:(NSString *)baseURL;
++ (nullable NSDictionary *)elevenklasovFeedFromData:(NSData *)data baseURL:(NSString *)baseURL;
++ (nullable NSString *)elevenklasovTitleFromHTML:(NSString *)html;
++ (NSString *)absoluteImageURL:(NSString *)href base:(NSString *)baseURL;
 @end
 
 @implementation OROPDS
@@ -62,14 +67,18 @@
     // Plain links, JS buttons and redirects used by OPDS book pages.
     collect(@"<a[^>]+href\\s*=\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
     collect(@"window\\.open\\s*\\(\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
+    collect(@"window\\.open\\s*\\(\\s*&quot;([^&]+)&quot;", NSRegularExpressionCaseInsensitive);
     collect(@"(?:window\\.)?location(?:\\.href)?\\s*=\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
-    collect(@"location\\.replace\\s*\\(\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
+    collect(@"location\\.(?:replace|assign)\\s*\\(\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
+    collect(@"document\\.location\\s*=\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
     collect(@"<meta[^>]+content\\s*=\\s*[\"'][^\"']*url=([^\"';]+)", NSRegularExpressionCaseInsensitive);
     // Any quoted URL that already looks like a book file.
     collect(@"[\"']((?:https?:)?//[^\"']+\\.(?:fb2|epub|pdf|txt|zip|mobi|azw3?))[\"']", NSRegularExpressionCaseInsensitive);
     collect(@"[\"'](/[^\"']+\\.(?:fb2|epub|pdf|txt|zip|mobi|azw3?))[\"']", NSRegularExpressionCaseInsensitive);
     // Flibusta-style endpoints, also when hidden inside an onclick handler.
     collect(@"((?:https?://[^\"'\\s]+)?/b/\\d+/download/\\?format=[a-z0-9.]+)", NSRegularExpressionCaseInsensitive);
+    collect(@"((?:https?://[^\"'\\s&]+)?/b/\\d+/download/\\?format=[a-z0-9.]+)", NSRegularExpressionCaseInsensitive);
+    collect(@"((?:https?://[^\"'\\s]+)?/b/\\d+/download/?)(?=[\"'\\s])", NSRegularExpressionCaseInsensitive);
 
     NSString *best = nil;
     NSInteger bestScore = 0;
@@ -83,9 +92,14 @@
         if (absolute.length == 0 || [absolute isEqualToString:baseURL]) continue;
         NSURL *url = [NSURL URLWithString:absolute];
         NSString *host = url.host.lowercaseString ?: @"";
+        // Never send the downloader to an advert network, but a link on the
+        // catalog's own host is always legitimate (some hosts contain words
+        // like "yandex" in their name).
         BOOL advert = NO;
-        for (NSString *needle in adHosts) {
-            if (host.length > 0 && [host containsString:needle]) { advert = YES; break; }
+        if (!(host.length > 0 && [host isEqualToString:baseHost])) {
+            for (NSString *needle in adHosts) {
+                if (host.length > 0 && [host containsString:needle]) { advert = YES; break; }
+            }
         }
         if (advert) continue;
         NSString *extension = url.path.pathExtension.lowercaseString;
@@ -251,7 +265,9 @@
                                                     userInfo:@{NSLocalizedDescriptionKey: @"Пустой ответ каталога"}]);
             return;
         }
-        NSDictionary *feed = [self parseFeedData:data baseURL:urlString];
+        NSDictionary *feed = [self isHTMLCatalogURL:urlString]
+            ? [self feedFromHTMLCatalogData:data baseURL:urlString]
+            : [self parseFeedData:data baseURL:urlString];
         if (!feed) {
             completion(nil, [NSError errorWithDomain:@"OmniReader.OPDS" code:2
                                             userInfo:@{NSLocalizedDescriptionKey: @"Не удалось разобрать OPDS-каталог"}]);
@@ -475,8 +491,19 @@
     }
     if (formatHint.length > 0 && formatHint.length <= 5) extension = formatHint;
 
-    NSMutableArray<NSString *> *candidates = [NSMutableArray arrayWithObject:href];
-    [candidates addObjectsFromArray:[self derivedDownloadURLsForURL:href]];
+    NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+    NSArray<NSString *> *derived = [self derivedDownloadURLsForURL:href];
+    BOOL bookPage = [href rangeOfString:@"/b/\\d+" options:NSRegularExpressionSearch].location != NSNotFound;
+    if (bookPage) {
+        // Try the direct endpoints first: it avoids the Flibusta/lib.rus.ec
+        // interstitial page the anonymous downloader would otherwise have to
+        // parse (and which sometimes contains only a countdown script).
+        [candidates addObjectsFromArray:derived];
+        [candidates addObject:href];
+    } else {
+        [candidates addObject:href];
+        [candidates addObjectsFromArray:derived];
+    }
 
     NSMutableSet<NSString *> *visited = [NSMutableSet set];
     __block NSInteger hops = 0;
@@ -532,7 +559,7 @@
                                                        error:NULL];
             [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
             NSString *next = [self downloadLinkInHTML:payload baseURL:url];
-            if (next.length > 0 && hops < 3 && ![visited containsObject:next]) {
+            if (next.length > 0 && hops < 5 && ![visited containsObject:next]) {
                 hops += 1;
                 NSString *nextExtension = [NSURL URLWithString:next].path.pathExtension.lowercaseString;
                 attempt(next, [known containsObject:nextExtension] ? nextExtension : ext, includeCredentials);
@@ -767,6 +794,216 @@
 + (NSString *)unescapeXML:(NSString *)string {
     if (string.length == 0) return @"";
     return [ORText decodeEntities:string];
+}
+
+#pragma mark - HTML catalogs (so.11klasov.net)
+
+/// so.11klasov.net publishes no OPDS feed: it is a plain PHP/JS site. The app
+/// turns its class and subject pages into the same feed dictionaries the rest
+/// of the OPDS browser consumes, so covers, downloading and navigation work
+/// without a server-side proxy.
++ (BOOL)isHTMLCatalogURL:(NSString *)urlString {
+    NSString *host = [NSURL URLWithString:urlString].host.lowercaseString ?: @"";
+    return [host isEqualToString:@"so.11klasov.net"] || [host hasSuffix:@".11klasov.net"];
+}
+
++ (NSString *)absoluteImageURL:(NSString *)href base:(NSString *)baseURL {
+    if (href.length == 0) return nil;
+    if ([href hasPrefix:@"//"]) return [@"https:" stringByAppendingString:href];
+    if ([href hasPrefix:@"http://"] || [href hasPrefix:@"https://"]) return href;
+    return [self absoluteURL:href base:baseURL];
+}
+
++ (NSString *)elevenklasovTitleFromHTML:(NSString *)html {
+    NSString *heading = [ORText firstMatchPattern:@"(?is)<h1[^>]*>(.*?)</h1>" inString:html group:1];
+    heading = [ORText decodeEntities:[ORText stripHTML:heading ?: @""]];
+    heading = [heading stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (heading.length > 0) return heading;
+    NSString *title = [ORText firstMatchPattern:@"(?is)<title[^>]*>(.*?)</title>" inString:html group:1];
+    title = [ORText decodeEntities:[ORText stripHTML:title ?: @""]];
+    return [title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
++ (NSDictionary *)elevenklasovFeedFromData:(NSData *)data baseURL:(NSString *)baseURL {
+    NSString *html = [ORText stringFromData:data];
+    if (html.length == 0) return nil;
+    NSURL *base = [NSURL URLWithString:baseURL];
+    NSString *host = base.host ?: @"so.11klasov.net";
+    NSString *scheme = base.scheme ?: @"https";
+    NSString *origin = [NSString stringWithFormat:@"%@://%@", scheme, host];
+    NSString *path = base.path ?: @"/";
+
+    NSMutableDictionary *feed = [NSMutableDictionary dictionary];
+    feed[@"baseURL"] = baseURL;
+    feed[@"links"] = @[];
+    NSMutableArray<NSDictionary *> *entries = [NSMutableArray array];
+
+    BOOL root = (path.length == 0 || [path isEqualToString:@"/"]);
+
+    if (root) {
+        feed[@"title"] = @"Школьные учебники";
+        NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:
+            @"<a\\b[^>]*href=\"(/[a-z0-9-]+/)\"[^>]*>([\\s\\S]*?)</a>"
+            options:NSRegularExpressionCaseInsensitive
+              error:NULL];
+        NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:html
+                                                                  options:0
+                                                                    range:NSMakeRange(0, html.length)];
+        NSMutableSet<NSString *> *seen = [NSMutableSet set];
+        NSMutableArray<NSDictionary *> *classes = [NSMutableArray array];
+        NSMutableArray<NSDictionary *> *exams = [NSMutableArray array];
+        NSMutableArray<NSDictionary *> *subjects = [NSMutableArray array];
+
+        for (NSTextCheckingResult *match in matches) {
+            if (match.numberOfRanges < 3) continue;
+            NSString *href = [html substringWithRange:[match rangeAtIndex:1]];
+            if ([seen containsObject:href]) continue;
+            [seen addObject:href];
+            NSString *slug = [href stringByTrimmingCharactersInSet:
+                                  [NSCharacterSet characterSetWithCharactersInString:@"/"]];
+            NSString *label = [ORText stripHTML:[html substringWithRange:[match rangeAtIndex:2]]];
+            label = [ORText decodeEntities:label ?: @""];
+            label = [ORText replacePattern:@"\\s+\\d+\\s*$" inString:label withTemplate:@""];
+            label = [label stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (label.length == 0) label = slug;
+
+            NSString *title = label;
+            NSInteger group = 2; // 0 = classes, 1 = exam categories, 2 = subjects
+            if ([slug hasSuffix:@"-klass"] &&
+                [slug rangeOfCharacterFromSet:[NSCharacterSet decimalDigitCharacterSet]].location == 0) {
+                title = [NSString stringWithFormat:@"%@ класс", label];
+                group = 0;
+            } else if ([slug isEqualToString:@"giaoge"] || [slug isEqualToString:@"ege"] ||
+                       [slug isEqualToString:@"vpr"] || [slug isEqualToString:@"gdz"]) {
+                group = 1;
+            }
+            NSString *absolute = [self absoluteURL:href base:origin] ?: href;
+            NSDictionary *entry = @{
+                @"title": title.length > 0 ? title : slug,
+                @"id": absolute,
+                @"navigation": @YES,
+                @"acquisition": @NO,
+                @"links": @[@{@"rel": @"subsection", @"type": @"application/atom+xml", @"href": absolute}]
+            };
+            if (group == 0) [classes addObject:entry];
+            else if (group == 1) [exams addObject:entry];
+            else [subjects addObject:entry];
+        }
+
+        [classes sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+            NSInteger left = [(NSString *)a[@"title"] integerValue];
+            NSInteger right = [(NSString *)b[@"title"] integerValue];
+            if (left == right) return NSOrderedSame;
+            return left < right ? NSOrderedAscending : NSOrderedDescending;
+        }];
+        [entries addObjectsFromArray:classes];
+        [entries addObjectsFromArray:exams];
+        [entries addObjectsFromArray:subjects];
+        if (entries.count == 0) return nil;
+        feed[@"entries"] = entries;
+        return feed;
+    }
+
+    // A class or subject page: 24 book cards per page.
+    NSString *title = [self elevenklasovTitleFromHTML:html];
+    feed[@"title"] = title.length > 0 ? title : @"Учебники";
+
+    NSArray<NSString *> *cards = [ORText matchesPattern:
+        @"(?is)<article\\b[^>]*class=\"card\"[^>]*>(.*?)</article>"
+                                               inString:html
+                                                  group:1];
+    for (NSString *chunk in cards) {
+        NSString *bookHref = [ORText firstMatchPattern:@"href=\"([^\"]+)\"" inString:chunk group:1];
+        if (bookHref.length == 0) continue;
+        bookHref = [self absoluteURL:[ORText decodeEntities:bookHref] base:baseURL];
+
+        NSString *cover = [ORText firstMatchPattern:@"<img[^>]+src=\"([^\"]+)\"" inString:chunk group:1];
+        cover = [self absoluteImageURL:cover base:baseURL];
+
+        NSString *rawTitle = [ORText firstMatchPattern:
+            @"class=\"name th-title\"><a[^>]*>([\\s\\S]*?)</a>" inString:chunk group:1];
+        rawTitle = [ORText decodeEntities:[ORText stripHTML:rawTitle ?: @""]];
+        rawTitle = [rawTitle stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (rawTitle.length == 0) continue;
+
+        NSString *year = [ORText firstMatchPattern:@"class=\"yr\">([^<]*)<" inString:chunk group:1];
+        NSString *fmt = [ORText firstMatchPattern:@"class=\"fmt\">([^<]*)<" inString:chunk group:1];
+        year = [year stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        fmt = [fmt stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+
+        // Cards use «Название - Автор»; split at the last dash.
+        NSString *bookTitle = rawTitle;
+        NSString *author = @"";
+        NSRange dash = [rawTitle rangeOfString:@" - " options:NSBackwardsSearch];
+        if (dash.location != NSNotFound) {
+            NSString *tail = [[rawTitle substringFromIndex:dash.location + dash.length]
+                              stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (tail.length > 1 && tail.length < 90) {
+                author = tail;
+                bookTitle = [[rawTitle substringToIndex:dash.location]
+                             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            }
+        }
+
+        NSMutableArray<NSString *> *summaryParts = [NSMutableArray array];
+        if (fmt.length > 0) [summaryParts addObject:fmt.uppercaseString];
+        if (year.length > 0) [summaryParts addObject:year];
+        NSString *summary = [summaryParts componentsJoinedByString:@" · "];
+
+        NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+        entry[@"title"] = bookTitle.length > 0 ? bookTitle : rawTitle;
+        if (author.length > 0) entry[@"author"] = author;
+        if (summary.length > 0) entry[@"summary"] = summary;
+        entry[@"id"] = bookHref;
+        if (cover.length > 0) entry[@"image"] = cover;
+        entry[@"navigation"] = @NO;
+        entry[@"acquisition"] = @YES;
+        // The list page has no direct file link: the downloader opens the book
+        // page (HTML) and follows its «Скачать» button.
+        entry[@"links"] = @[
+            @{@"rel": @"alternate", @"type": @"text/html", @"href": bookHref},
+            @{@"rel": @"acquisition", @"type": @"application/octet-stream", @"href": bookHref}
+        ];
+        [entries addObject:entry];
+    }
+
+    // Pagination: expose the next page as a navigation entry.
+    NSInteger currentPage = 1;
+    NSString *pageValue = [ORText firstMatchPattern:@"(?i)/page/(\\d+)/?$" inString:path group:1];
+    if (pageValue.length > 0) currentPage = pageValue.integerValue;
+
+    NSRegularExpression *pageRegex = [NSRegularExpression regularExpressionWithPattern:
+        @"href=\"([^\"]*/page/(\\d+)/?)\"" options:NSRegularExpressionCaseInsensitive error:NULL];
+    NSArray<NSTextCheckingResult *> *pageMatches = [pageRegex matchesInString:html
+                                                                     options:0
+                                                                       range:NSMakeRange(0, html.length)];
+    NSString *nextHref = nil;
+    for (NSTextCheckingResult *match in pageMatches) {
+        if (match.numberOfRanges < 3) continue;
+        NSString *href = [html substringWithRange:[match rangeAtIndex:1]];
+        NSInteger number = [html substringWithRange:[match rangeAtIndex:2]].integerValue;
+        if (number == currentPage + 1) {
+            nextHref = [self absoluteURL:[ORText decodeEntities:href] base:baseURL];
+            break;
+        }
+    }
+    if (nextHref.length > 0) {
+        [entries addObject:@{
+            @"title": @"Следующая страница →",
+            @"id": nextHref,
+            @"navigation": @YES,
+            @"acquisition": @NO,
+            @"links": @[@{@"rel": @"subsection", @"type": @"application/atom+xml", @"href": nextHref}]
+        }];
+    }
+
+    if (entries.count == 0) return nil;
+    feed[@"entries"] = entries;
+    return feed;
+}
+
++ (NSDictionary *)feedFromHTMLCatalogData:(NSData *)data baseURL:(NSString *)baseURL {
+    return [self elevenklasovFeedFromData:data baseURL:baseURL];
 }
 
 @end

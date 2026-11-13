@@ -81,9 +81,15 @@ curl -H "Authorization: OAuth $TOKEN" https://books.yandex.ru/api/v1/library
 
 ## Схема GraphQL и корень запроса
 
-У Яндекс Книг нет поля `me` в корне Query. Приложение перебирает известные корни
-(`viewer`, `viewerUser`, `currentUser`, `user`, `account`, `profile`, `session`, `userInfo`, `myProfile`),
-кэширует первый работающий и использует его для полки. Логика — `+probeViewerWithCandidates:` в `ORYandexAPI.m`.
+У Яндекс Книг нет поля `me` в корне Query. `ORYandexAPI +fetchViewerProfile:`
+перебирает корни `userProfile`, `viewer`, `me`, `currentUser`, `user` и `profile`
+(`+probeProfileRoots:index:completion:`) и кэширует первый рабочий.
+
+Если BFF отвечает `200`, но корень равен `null` (у OAuth-приложения нет доступа
+к сервису «Книги»), приложение запрашивает логин у `https://login.yandex.ru/info`.
+Этого достаточно, чтобы открыть полку по `login`. Если и там пусто, текст ошибки
+объясняет, что доступ к «Книгам» нужно выдать OAuth-приложению в кабинете
+Яндекс ID.
 
 Кнопка **Настройки → Яндекс Книги → Статус** печатает отчёт: какой корень принят и что вернул сервер.
 Если все корни отвергнуты — схема снова изменилась, нужен новый список полей.
@@ -104,8 +110,9 @@ curl -H "Authorization: OAuth $TOKEN" https://books.yandex.ru/api/v1/library
 | `userNotifications` | `page, perPage` | уведомления |
 
 Приложение проверяет токен запросом
-`query Viewer { userProfile { login id name } }`; при успехе показывает логин,
-затем пробует личную полку.
+`query Viewer { userProfile { login id name } }`; если поле не принимается,
+пробуются остальные корни из списка выше, а затем `login.yandex.ru`. При успехе
+показывается логин, после чего открывается личная полка.
 
 ## Личная полка и whitelist
 
