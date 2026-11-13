@@ -863,14 +863,20 @@
                                   [NSCharacterSet characterSetWithCharactersInString:@"/"]];
             NSString *label = [ORText stripHTML:[html substringWithRange:[match rangeAtIndex:2]]];
             label = [ORText decodeEntities:label ?: @""];
-            label = [ORText replacePattern:@"\\s+\\d+\\s*$" inString:label withTemplate:@""];
+            BOOL isClass = [slug hasSuffix:@"-klass"] &&
+                [slug rangeOfCharacterFromSet:[NSCharacterSet decimalDigitCharacterSet]].location == 0;
+            // Subject anchors carry the number of books in <i>, so the stripped
+            // label reads "Математика1348"; drop that counter. Class labels are
+            // pure digits, and they stay untouched.
+            if (!isClass) {
+                label = [ORText replacePattern:@"\\s*\\d+\\s*$" inString:label withTemplate:@""];
+            }
             label = [label stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
             if (label.length == 0) label = slug;
 
             NSString *title = label;
             NSInteger group = 2; // 0 = classes, 1 = exam categories, 2 = subjects
-            if ([slug hasSuffix:@"-klass"] &&
-                [slug rangeOfCharacterFromSet:[NSCharacterSet decimalDigitCharacterSet]].location == 0) {
+            if (isClass) {
                 title = [NSString stringWithFormat:@"%@ класс", label];
                 group = 0;
             } else if ([slug isEqualToString:@"giaoge"] || [slug isEqualToString:@"ege"] ||
