@@ -23,7 +23,13 @@ static NSString *ORHTTPMessageForStatus(NSInteger statusCode) {
         NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
         config.timeoutIntervalForRequest = 60;
         config.timeoutIntervalForResource = 300;
-        config.HTTPAdditionalHeaders = @{@"User-Agent": @"OmniReader/1.0 (iOS)"};
+        // Use a browser-like User-Agent to avoid blocking by sites like coollib.in
+        // Include Accept and Accept-Language in additional headers so they're sent on redirect
+        config.HTTPAdditionalHeaders = @{
+            @"User-Agent": @"Mozilla/5.0 (iPhone; CPU iPhone OS 12_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1 Mobile/15E148 Safari/604.1",
+            @"Accept": @"application/atom+xml,application/xml,text/html,*/*",
+            @"Accept-Language": @"ru,en;q=0.9"
+        };
         session = [NSURLSession sessionWithConfiguration:config];
     });
     return session;

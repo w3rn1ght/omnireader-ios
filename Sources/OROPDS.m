@@ -247,15 +247,12 @@
                            userInfo:@{NSLocalizedDescriptionKey: @"Файл не является книгой в известном формате."}];
 }
 
-+ (NSString *)browserUserAgent {
-    return @"Mozilla/5.0 (iPhone; CPU iPhone OS 12_5 like Mac OS X) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1 Mobile/15E148 Safari/604.1";
-}
-
 + (NSDictionary *)headersForCatalog:(NSDictionary *)catalog {
-    NSMutableDictionary *headers =
-        [@{@"Accept": @"application/atom+xml,application/xml,*/*",
-           @"User-Agent": [self browserUserAgent]} mutableCopy];
+    NSMutableDictionary *headers = [NSMutableDictionary dictionary];
+    // User-Agent, Accept, Accept-Language are set in ORHTTP session's HTTPAdditionalHeaders
+    // and will be sent on redirects too.
+    // Override Accept for feed-specific content type if needed.
+    headers[@"Accept"] = @"application/atom+xml,application/xml,*/*";
     NSString *user = catalog[@"user"];
     if (user.length > 0) {
         NSString *password = [[ORSettings shared] passwordForOPDSCatalog:catalog[@"id"] ?: @""] ?: @"";
@@ -271,9 +268,9 @@
                             includeCredentials:(BOOL)includeCredentials {
     NSMutableDictionary *headers =
         [@{@"Accept": @"application/octet-stream,application/fb2+xml,application/epub+zip,"
-                       "application/zip,text/plain,*/*",
-           @"Accept-Language": @"ru,en;q=0.9",
-           @"User-Agent": [self browserUserAgent]} mutableCopy];
+                       "application/zip,text/plain,*/*"} mutableCopy];
+    // User-Agent and Accept-Language are set in ORHTTP session's HTTPAdditionalHeaders
+    // and will be sent on redirects too.
     NSString *user = catalog[@"user"];
     if (includeCredentials && user.length > 0) {
         NSString *password = [[ORSettings shared] passwordForOPDSCatalog:catalog[@"id"] ?: @""] ?: @"";
