@@ -14,7 +14,9 @@
 + (nullable NSDictionary *)tolerantFeedFromData:(NSData *)data baseURL:(NSString *)baseURL;
 + (NSString *)attribute:(NSString *)name inTag:(NSString *)tag;
 + (NSString *)unescapeXML:(NSString *)string;
-+ (nullable NSError *)validateDownloadedFile:(NSString *)path;
++ (nullable NSError *)validateDownloadedFile:(NSString *)path
+                            sourceURL:(nullable NSString *)sourceURL
+                             catalog:(nullable NSDictionary *)catalog;
 + (nullable NSString *)downloadLinkInHTML:(nullable NSData *)data baseURL:(NSString *)baseURL;
 + (NSArray<NSString *> *)derivedDownloadURLsForURL:(NSString *)entryURL;
 + (NSString *)refererForURL:(NSString *)urlString;
@@ -185,7 +187,9 @@
     return urlString;
 }
 
-+ (NSError *)validateDownloadedFile:(NSString *)path {
++ (NSError *)validateDownloadedFile:(NSString *)path
+                            sourceURL:(nullable NSString *)sourceURL
+                             catalog:(nullable NSDictionary *)catalog {
     NSData *data = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:NULL];
     if (!data || data.length == 0) {
         return [NSError errorWithDomain:@"OmniReader.OPDS" code:4
@@ -218,13 +222,26 @@
     if (zip || rar || pdf || mobi || djvu || audio) return nil;
     if ([ORText looksLikeHTML:data]) {
         NSString *page = [ORText stripHTML:[ORText stringFromData:data]];
-        if (page.length > 200) page = [[page substringToIndex:200] stringByAppendingString:@"…"];
+        if (page.length > 200) page = [[page substringToIndex:200] stringByAppendingString:@"..."];
+
+        // Check for known catalogs that require login
+        NSString *host = [NSURL URLWithString:sourceURL].host.lowercaseString ?: @"";
+        if ([host containsString:@"lib.rus.ec"] || [host containsString:@"flibusta.is"]) {
+            return [NSError errorWithDomain:@"OmniReader.OPDS" code:5
+                               userInfo:@{NSLocalizedDescriptionKey:
+                                           [NSString stringWithFormat:
+                                            @"Каталог %@ требует входа в аккаунт для скачивания.\n\n"
+                                            "Этот каталог больше не отдаёт книги анонимно. "
+                                            "Рекомендуем использовать зеркало coollib.in (добавьте его в каталоги: https://coollib.in/opds), "
+                                            "которое работает без авторизации.", host ?: @"lib.rus.ec/flibusta.is"]}];
+        }
+
         return [NSError errorWithDomain:@"OmniReader.OPDS" code:5
                                userInfo:@{NSLocalizedDescriptionKey:
-                                              [NSString stringWithFormat:
-                                               @"Каталог вернул веб-страницу вместо файла:\n\n%@\n\n"
-                                                "Скорее всего, сайт показывает кнопку или обратный отсчёт. "
-                                                "Можно повторить загрузку или открыть книгу в Safari.", page]}];
+                                           [NSString stringWithFormat:
+                                            @"Каталог вернул веб-страницу вместо файла:\n\n%@\n\n"
+                                             "Скорее всего, сайт показывает кнопку или обратный отсчёт. "
+                                             "Можно повторить загрузку или открыть книгу в Safari.", page]}];
     }
     return [NSError errorWithDomain:@"OmniReader.OPDS" code:6
                            userInfo:@{NSLocalizedDescriptionKey: @"Файл не является книгой в известном формате."}];
@@ -589,7 +606,9 @@
             }
             // Catalogs often answer with an HTML page instead of the book (login
             // wall, "file moved", anti-leech, countdown). Follow the real link.
-            NSError *validationError = [self validateDownloadedFile:path];
+            NSError *validationError = [self validateDownloadedFile:path
+                                                           sourceURL:url
+                                                            catalog:catalog];
             if (!validationError) {
                 finished = YES;
                 NSString *base = entry[@"title"] ?: @"book";

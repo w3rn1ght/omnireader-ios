@@ -28,8 +28,7 @@ static NSString *const ORYandexCookieKey = @"yandex.cookies";
 + (NSString *)loginFromCookies {
     NSString *header = self.cookieHeader;
     if (header.length == 0) return nil;
-    // Yandex uses various cookie names for login; try the most common ones
-    for (NSString *name in @[@"yandex_login", @"login", @"yandex_login_id", @"Session_id", @"yashr", @"yandexuid"]) {
+    for (NSString *name in @[@"yandex_login", @"login", @"yandex_login_id"]) {
         NSString *prefix = [name stringByAppendingString:@"="];
         for (NSString *part in [header componentsSeparatedByString:@";"]) {
             NSString *pair = [part stringByTrimmingCharactersInSet:
@@ -44,7 +43,7 @@ static NSString *const ORYandexCookieKey = @"yandex.cookies";
 }
 
 + (void)captureCookiesFromWebView:(WKWebView *)webView
-                   completion:(void (^)(NSString *))completion {
+                       completion:(void (^)(NSString *))completion {
     if (!completion) return;
     WKHTTPCookieStore *store = webView.configuration.websiteDataStore.httpCookieStore;
     [store getAllCookies:^(NSArray<NSHTTPCookie *> *cookies) {
@@ -52,13 +51,11 @@ static NSString *const ORYandexCookieKey = @"yandex.cookies";
         NSMutableArray<NSString *> *pairs = [NSMutableArray array];
         for (NSHTTPCookie *cookie in cookies) {
             NSString *domain = cookie.domain.lowercaseString ?: @"";
-            // Accept cookies from yandex, passport, books domains
-            if (![domain containsString:@"yandex"] && ![domain containsString:@"passport"]) continue;
+            if (![domain containsString:@"yandex"]) continue;
             if (cookie.expiresDate && [cookie.expiresDate compare:now] != NSOrderedDescending) continue;
             if (cookie.name.length == 0) continue;
             [pairs addObject:[NSString stringWithFormat:@"%@=%@", cookie.name, cookie.value ?: @""]];
         }
-        // Also try to get the Yandex Session_id cookie specifically (most important for p-graphql)
         NSString *header = [pairs componentsJoinedByString:@"; "];
         if (header.length > 0) [self setCookieHeader:header];
         dispatch_async(dispatch_get_main_queue(), ^{
