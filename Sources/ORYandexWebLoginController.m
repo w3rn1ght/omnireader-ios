@@ -7,11 +7,13 @@
 /// The retpath brings the user back to the shelf after successful login.
 static NSString *const ORYandexPassportLoginURL = @"https://passport.yandex.ru/auth?origin=books&retpath=https%3A%2F%2Fbooks.yandex.ru%2Fmy%2Fbooks%2Fall";
 
-@interface ORYandexWebLoginController () <WKNavigationDelegate, WKUIDelegate>
+@interface ORYandexWebLoginController () <WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler>
 @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, strong) UIBarButtonItem *doneItem;
 @property (nonatomic, strong) UIBarButtonItem *refreshItem;
+@property (nonatomic, strong) UIBarButtonItem *submitFormItem;
+@property (nonatomic, strong) UIBarButtonItem *resendCodeItem;
 @property (nonatomic) BOOL captured;
 @end
 
@@ -37,71 +39,260 @@ static NSString *const ORYandexPassportLoginURL = @"https://passport.yandex.ru/a
     self.refreshItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
                                                                        target:self
                                                                        action:@selector(refresh)];
+    
+    self.submitFormItem = [[UIBarButtonItem alloc] initWithTitle:@"Далее ▶"
+                                                           style:UIBarButtonItemStylePlain
+                                                          target:self
+                                                          action:@selector(submitForm)];
+    self.submitFormItem.enabled = YES;
+    
+    self.resendCodeItem = [[UIBarButtonItem alloc] initWithTitle:@"🔁 Код"
+                                                          style:UIBarButtonItemStylePlain
+                                                         target:self
+                                                         action:@selector(resendCode)];
+    self.resendCodeItem.enabled = YES;
+    
     self.doneItem = [[UIBarButtonItem alloc] initWithTitle:@"Готово"
                                                      style:UIBarButtonItemStyleDone
                                                     target:self
                                                     action:@selector(finish)];
     self.doneItem.enabled = NO;
-    self.navigationItem.rightBarButtonItems = @[self.doneItem, self.refreshItem];
+    self.navigationItem.rightBarButtonItems = @[self.doneItem, self.resendCodeItem, self.submitFormItem, self.refreshItem];
 
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
     configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
     configuration.preferences.javaScriptEnabled = YES;
     configuration.preferences.javaScriptCanOpenWindowsAutomatically = YES;
     
-    // Inject script to fix click handlers on Yandex Passport pages
+    // Allow mixed content for embedded resources
+    #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 130000
+    if (@available(iOS 13.0, *)) {
+        // WKWebView doesn't have a direct mixed content setting on iOS, but we can try
+    }
+    #endif
+    
+    // Inject comprehensive fix script for Yandex Passport
     NSString *fixScript = @"(function() {"
-        "  // Make all elements with onclick/ontouchstart clickable"
-        "  var style = document.createElement('style');"
-        "  style.textContent = '*[onclick], *[ontouchstart], button, input[type=button], input[type=submit], .button, .btn, [role=button] { cursor: pointer !important; -webkit-tap-highlight-color: rgba(0,0,0,0.1) !important; touch-action: manipulation !important; }';"
-        "  document.head.appendChild(style);"
+        "  'use strict';"
         ""
-        "  // Fix for Yandex Passport account selection - make radio labels clickable"
-        "  function fixAccountSelection() {"
-        "    var labels = document.querySelectorAll('label[for], .passport-AccountList-Account, .AccountList-Account, [data-t=\"account-list-item\"]');"
-        "    labels.forEach(function(el) {"
-        "      el.style.cursor = 'pointer';"
-        "      el.style.webkitTapHighlightColor = 'rgba(0,0,0,0.1)';"
-        "      if (!el.onclick) {"
-        "        el.onclick = function(e) {"
-        "          var input = this.querySelector('input[type=radio], input[type=checkbox]') || document.getElementById(this.getAttribute('for'));"
-        "          if (input) { input.checked = true; input.dispatchEvent(new Event('change', {bubbles: true})); }"
-        "        };"
-        "      }"
-        "    });"
+        "  // ===== Style fixes for clickable elements ====="
+        "  function injectStyles() {"
+        "    if (document.getElementById('omni-fix-styles')) return;"
+        "    var style = document.createElement('style');"
+        "    style.id = 'omni-fix-styles';"
+        "    style.textContent = "
+        "      '*[onclick], *[ontouchstart], button, input[type=button], input[type=submit], "
+        "       .button, .btn, [role=button], .passport-Button, .Button2, "
+        "       [class*=\"Button\"], [class*=\"button\"] { "
+        "         cursor: pointer !important; "
+        "         -webkit-tap-highlight-color: rgba(0,0,0,0.1) !important; "
+        "         touch-action: manipulation !important; "
+        "         pointer-events: auto !important; "
+        "       }';"
+        "    document.head.appendChild(style);"
         "  }"
         ""
-        "  // Fix for 'Resend code' button"
-        "  function fixResendButton() {"
-        "    var buttons = document.querySelectorAll('button, .button, .btn, [type=submit], [type=button], a.button');"
-        "    buttons.forEach(function(btn) {"
-        "      var text = (btn.textContent || btn.innerText || '').toLowerCase();"
-        "      if (text.indexOf('resend') !== -1 || text.indexOf('повтор') !== -1 || text.indexOf('отправ') !== -1 || text.indexOf('смс') !== -1 || text.indexOf('звон') !== -1) {"
-        "        btn.style.pointerEvents = 'auto';"
-        "        btn.style.cursor = 'pointer';"
+        "  // ===== Find and fix form submit buttons ====="
+        "  function fixFormSubmits() {"
+        "    // Find all forms"
+        "    var forms = document.querySelectorAll('form');"
+        "    forms.forEach(function(form) {"
+        "      if (form.dataset.omniFixed) return;"
+        "      form.dataset.omniFixed = '1';"
+        "      "
+        "      // Find submit buttons in this form"
+        "      var submitBtns = form.querySelectorAll('button[type=submit], input[type=submit], "
+        "        button:not([type]), button[type=button], "
+        "        .passport-Button_type_submit, .Button2_type_submit, "
+        "        [class*=\"Button\"][class*=\"submit\"], "
+        "        [class*=\"button\"][class*=\"submit\"]');"
+        "      "
+        "      submitBtns.forEach(function(btn) {"
         "        btn.disabled = false;"
         "        btn.removeAttribute('disabled');"
+        "        btn.style.pointerEvents = 'auto';"
+        "        "
+        "        // Wrap click to ensure form submits"
+        "        if (!btn.dataset.omniClickFixed) {"
+        "          btn.dataset.omniClickFixed = '1';"
+        "          var originalClick = btn.onclick;"
+        "          btn.onclick = function(e) {"
+        "            if (originalClick) originalClick.call(this, e);"
+        "            // If button is in a form, submit it"
+        "            var form = this.closest('form');"
+        "            if (form && !form.dataset.omniSubmitting) {"
+        "              form.dataset.omniSubmitting = '1';"
+        "              setTimeout(function() { form.dataset.omniSubmitting = '0'; }, 1000);"
+        "              form.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));"
+        "            }"
+        "          };"
+        "        }"
+        "      });"
+        "    });"
+        "  }"
+        ""
+        "  // ===== Fix 'Next' (Далее) button ====="
+        "  function fixNextButton() {"
+        "    // Multiple selectors for Yandex Passport 'Next' button"
+        "    var selectors = ["
+        "      'button:contains(\"Далее\"), button:contains(\"Next\"), button:contains(\"Войти\"), button:contains(\"Sign in\")',"
+        "      'button[type=submit]', 'input[type=submit]',"
+        "      '.passport-Button_type_submit', '.Button2_type_submit',"
+        "      '[data-t=\"submit\"]', '[data-t=\"next\"]', '[data-t=\"login\"]',"
+        "      'button.passport-Button', 'button.Button2',"
+        "      '[class*=\"Button\"][class*=\"submit\"], [class*=\"button\"][class*=\"submit\"]',"
+        "      'footer button', '.passport-Form-Footer button', '.Form-Footer button'"
+        "    ];"
+        "    "
+        "    // Since :contains is not standard, use textContent search"
+        "    var allButtons = document.querySelectorAll('button, input[type=button], input[type=submit], [role=button]');"
+        "    allButtons.forEach(function(btn) {"
+        "      var text = (btn.textContent || btn.value || btn.innerText || '').toLowerCase().trim();"
+        "      var isNext = text === 'далее' || text === 'next' || text === 'войти' || text === 'sign in' || text === 'продолжить' || text === 'continue';"
+        "      var isResend = text.indexOf('повтор') !== -1 || text.indexOf('resend') !== -1 ||"
+        "                     text.indexOf('отправ') !== -1 || text.indexOf('смс') !== -1 || text.indexOf('звон') !== -1;"
+        "      "
+        "      if (isNext || isResend || btn.type === 'submit' || btn.getAttribute('type') === 'submit') {"
+        "        btn.disabled = false;"
+        "        btn.removeAttribute('disabled');"
+        "        btn.style.pointerEvents = 'auto';"
+        "        btn.style.cursor = 'pointer';"
+        "        btn.dataset.omniIsNext = isNext;"
+        "        btn.dataset.omniIsResend = isResend;"
+        "        "
+        "        if (!btn.dataset.omniClickFixed) {"
+        "          btn.dataset.omniClickFixed = '1';"
+        "          btn.addEventListener('click', function(e) {"
+        "            // Try to submit parent form"
+        "            var form = this.closest('form');"
+        "            if (form) {"
+        "              form.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));"
+        "            }"
+        "            // Also try click on any nested button"
+        "            var nestedSubmit = form ? form.querySelector('button[type=submit], input[type=submit]') : null;"
+        "            if (nestedSubmit && nestedSubmit !== this) { nestedSubmit.click(); }"
+        "          }, true);" // Use capture phase
+        "        }"
         "      }"
         "    });"
         "  }"
         ""
-        "  // Run fixes periodically because Yandex loads content dynamically"
-        "  function runFixes() { fixAccountSelection(); fixResendButton(); }"
-        "  runFixes();"
-        "  setInterval(runFixes, 1000);"
+        "  // ===== Fix account selection (radio buttons) ====="
+        "  function fixAccountSelection() {"
+        "    var selectors = ["
+        "      'label[for]',"
+        "      '.passport-AccountList-Account',"
+        "      '.AccountList-Account',"
+        "      '[data-t=\"account-list-item\"]',"
+        "      '.passport-SelectAccount-item',"
+        "      '[class*=\"Account\"][class*=\"item\"]'"
+        "    ];"
+        "    var items = document.querySelectorAll(selectors.join(', '));"
+        "    items.forEach(function(el) {"
+        "      el.style.cursor = 'pointer';"
+        "      el.style.webkitTapHighlightColor = 'rgba(0,0,0,0.1)';"
+        "      if (!el.dataset.omniAccountFixed) {"
+        "        el.dataset.omniAccountFixed = '1';"
+        "        el.addEventListener('click', function(e) {"
+        "          var input = this.querySelector('input[type=radio], input[type=checkbox]') "
+        "                    || document.getElementById(this.getAttribute('for'));"
+        "          if (input) {"
+        "            input.checked = true;"
+        "            input.dispatchEvent(new Event('change', {bubbles: true}));"
+        "            input.dispatchEvent(new Event('input', {bubbles: true}));"
+        "          }"
+        "        }, true);"
+        "      }"
+        "    });"
+        "  }"
         ""
-        "  // Override alert/confirm/prompt to work in WKWebView"
+        "  // ===== Fix Resend Code button ====="
+        "  function fixResendButton() {"
+        "    var allButtons = document.querySelectorAll('button, a, [role=button], .button, .btn');"
+        "    allButtons.forEach(function(btn) {"
+        "      var text = (btn.textContent || btn.innerText || '').toLowerCase();"
+        "      if (text.indexOf('повтор') !== -1 || text.indexOf('resend') !== -1 ||"
+        "          text.indexOf('отправ') !== -1 || text.indexOf('смс') !== -1 || text.indexOf('звон') !== -1) {"
+        "        btn.disabled = false;"
+        "        btn.removeAttribute('disabled');"
+        "        btn.style.pointerEvents = 'auto';"
+        "        btn.style.cursor = 'pointer';"
+        "        btn.dataset.omniIsResend = '1';"
+        "        if (!btn.dataset.omniClickFixed) {"
+        "          btn.dataset.omniClickFixed = '1';"
+        "          btn.addEventListener('click', function(e) {"
+        "            e.preventDefault();"
+        "            e.stopPropagation();"
+        "            var form = this.closest('form');"
+        "            if (form) { form.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})); }"
+        "            this.click();"
+        "          }, true);"
+        "        }"
+        "      }"
+        "    });"
+        "  }"
+        ""
+        "  // ===== Override alert/confirm/prompt ====="
         "  window.alert = function(msg) { window.webkit.messageHandlers.omniAlert.postMessage(msg); };"
         "  window.confirm = function(msg) { window.webkit.messageHandlers.omniConfirm.postMessage(msg); return true; };"
         "  window.prompt = function(msg, def) { window.webkit.messageHandlers.omniPrompt.postMessage({message: msg, default: def}); return def; };"
+        ""
+        "  // ===== Run all fixes periodically ====="
+        "  function runAllFixes() {"
+        "    injectStyles();"
+        "    fixFormSubmits();"
+        "    fixNextButton();"
+        "    fixAccountSelection();"
+        "    fixResendButton();"
+        "  }"
+        "  "
+        "  // Run immediately and on DOM ready"
+        "  if (document.readyState === 'loading') {"
+        "    document.addEventListener('DOMContentLoaded', runAllFixes);"
+        "  } else {"
+        "    runAllFixes();"
+        "  }"
+        "  // And periodically for SPA navigation"
+        "  setInterval(runAllFixes, 1000);"
+        "  "
+        "  // Also run on any DOM mutation"
+        "  var observer = new MutationObserver(function() { runAllFixes(); });"
+        "  observer.observe(document.body, { childList: true, subtree: true });"
+        "  "
+        "  // Expose functions for toolbar buttons"
+        "  window.omniSubmitForm = function() {"
+        "    var forms = document.querySelectorAll('form');"
+        "    var submitted = false;"
+        "    forms.forEach(function(form) {"
+        "      if (!submitted) {"
+        "        var btn = form.querySelector('button[type=submit], input[type=submit], button[data-omni-is-next=\"true\"]');"
+        "        if (btn) { btn.click(); submitted = true; }"
+        "        else { form.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})); submitted = true; }"
+        "      }"
+        "    });"
+        "    return submitted;"
+        "  };"
+        "  "
+        "  window.omniResendCode = function() {"
+        "    var btns = document.querySelectorAll('button, a, [role=button]');"
+        "    var clicked = false;"
+        "    btns.forEach(function(btn) {"
+        "      var text = (btn.textContent || btn.innerText || '').toLowerCase();"
+        "      if (!clicked && (text.indexOf('повтор') !== -1 || text.indexOf('resend') !== -1 ||"
+        "          text.indexOf('отправ') !== -1 || text.indexOf('смс') !== -1 || text.indexOf('звон') !== -1)) {"
+        "        btn.click(); clicked = true;"
+        "      }"
+        "    });"
+        "    return clicked;"
+        "  };"
         "})();";
     
     WKUserScript *userScript = [[WKUserScript alloc] initWithSource:fixScript
-                                                    injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                                    injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                      forMainFrameOnly:NO];
     [configuration.userContentController addUserScript:userScript];
     
-    // Add message handlers for JS dialogs
+    // Add message handlers for JS dialogs and toolbar callbacks
     [configuration.userContentController addScriptMessageHandler:self name:@"omniAlert"];
     [configuration.userContentController addScriptMessageHandler:self name:@"omniConfirm"];
     [configuration.userContentController addScriptMessageHandler:self name:@"omniPrompt"];
@@ -149,6 +340,30 @@ static NSString *const ORYandexPassportLoginURL = @"https://passport.yandex.ru/a
     [self.webView reload];
 }
 
+- (void)submitForm {
+    [self.spinner startAnimating];
+    [self.webView evaluateJavaScript:@"window.omniSubmitForm()" completionHandler:^(id result, NSError *error) {
+        [self.spinner stopAnimating];
+        if (error) {
+            NSLog(@"[OmniReader] submitForm error: %@", error);
+        } else if (result) {
+            NSLog(@"[OmniReader] submitForm result: %@", result);
+        }
+    }];
+}
+
+- (void)resendCode {
+    [self.spinner startAnimating];
+    [self.webView evaluateJavaScript:@"window.omniResendCode()" completionHandler:^(id result, NSError *error) {
+        [self.spinner stopAnimating];
+        if (error) {
+            NSLog(@"[OmniReader] resendCode error: %@", error);
+        } else if (result) {
+            NSLog(@"[OmniReader] resendCode result: %@", result);
+        }
+    }];
+}
+
 - (void)finish {
     [self.spinner startAnimating];
     [ORYandexSession captureCookiesFromWebView:self.webView completion:^(NSString *header) {
@@ -179,46 +394,19 @@ static NSString *const ORYandexPassportLoginURL = @"https://passport.yandex.ru/a
             if (header.length > 0) self.doneItem.enabled = YES;
         }];
     }
-    // Re-inject fix script in case of SPA navigation
-    [self injectFixScript];
-}
-
-- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
-    [self.spinner stopAnimating];
-    if (error.code != NSURLErrorCancelled) {
-        NSLog(@"[OmniReader] Yandex web login failed: %@", error.localizedDescription);
-    }
-}
-
-- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
-    [self.spinner stopAnimating];
-    if (error.code != NSURLErrorCancelled) {
-        NSLog(@"[OmniReader] Yandex web login error: %@", error.localizedDescription);
-    }
 }
 
 // Allow all navigation (including redirects to passport, oauth, etc.)
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
                                                        decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    // Allow form submissions and all navigation
     decisionHandler(WKNavigationActionPolicyAllow);
 }
 
-- (void)injectFixScript {
-    NSString *script = @"(function() {"
-        "  var style = document.createElement('style');"
-        "  style.textContent = '*[onclick], *[ontouchstart], button, input[type=button], input[type=submit], .button, .btn, [role=button] { cursor: pointer !important; -webkit-tap-highlight-color: rgba(0,0,0,0.1) !important; touch-action: manipulation !important; }';"
-        "  document.head.appendChild(style);"
-        "  var labels = document.querySelectorAll('label[for], .passport-AccountList-Account, .AccountList-Account, [data-t=\"account-list-item\"]');"
-        "  labels.forEach(function(el) { el.style.cursor = 'pointer'; el.style.webkitTapHighlightColor = 'rgba(0,0,0,0.1)'; });"
-        "  var buttons = document.querySelectorAll('button, .button, .btn, [type=submit], [type=button], a.button');"
-        "  buttons.forEach(function(btn) {"
-        "    var text = (btn.textContent || btn.innerText || '').toLowerCase();"
-        "    if (text.indexOf('resend') !== -1 || text.indexOf('повтор') !== -1 || text.indexOf('отправ') !== -1 || text.indexOf('смс') !== -1 || text.indexOf('звон') !== -1) {"
-        "      btn.style.pointerEvents = 'auto'; btn.style.cursor = 'pointer'; btn.disabled = false; btn.removeAttribute('disabled');"
-        "    }"
-        "  });"
-        "})();";
-    [self.webView evaluateJavaScript:script completionHandler:nil];
+// Handle navigation response to allow all content
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse
+                                                        decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
+    decisionHandler(WKNavigationResponsePolicyAllow);
 }
 
 #pragma mark - WKUIDelegate (JavaScript dialogs)
