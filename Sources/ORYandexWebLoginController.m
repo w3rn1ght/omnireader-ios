@@ -3,12 +3,16 @@
 #import "ORUtil.h"
 #import <WebKit/WebKit.h>
 
-static NSString *const ORYandexShelfURL = @"https://books.yandex.ru/my/books/all";
+/// Start from the Yandex Passport login page, not the shelf.
+/// The shelf URL redirects to passport, but starting at passport directly
+/// gives more control and works better in embedded WebViews.
+static NSString *const ORYandexPassportLoginURL = @"https://passport.yandex.ru/auth?origin=books&retpath=https%3A%2F%2Fbooks.yandex.ru%2Fmy%2Fbooks%2Fall";
 
 @interface ORYandexWebLoginController () <WKNavigationDelegate>
 @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, strong) UIBarButtonItem *doneItem;
+@property (nonatomic, strong) UIBarButtonItem *refreshItem;
 @property (nonatomic) BOOL captured;
 @end
 
@@ -17,7 +21,7 @@ static NSString *const ORYandexShelfURL = @"https://books.yandex.ru/my/books/all
 - (instancetype)init {
     self = [super init];
     if (self) {
-        self.title = @"Вход в Яндекс";
+        self.title = @"Вход в Яндекс Книги";
     }
     return self;
 }
@@ -30,15 +34,21 @@ static NSString *const ORYandexShelfURL = @"https://books.yandex.ru/my/books/all
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
                                                       target:self
                                                       action:@selector(cancel)];
+    
+    self.refreshItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
+                                                                       target:self
+                                                                       action:@selector(refresh)];
     self.doneItem = [[UIBarButtonItem alloc] initWithTitle:@"Готово"
                                                      style:UIBarButtonItemStyleDone
                                                     target:self
                                                     action:@selector(finish)];
     self.doneItem.enabled = NO;
-    self.navigationItem.rightBarButtonItem = self.doneItem;
+    self.navigationItem.rightBarButtonItems = @[self.doneItem, self.refreshItem];
 
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
     configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+    // Allow mixed content and third-party cookies for the login flow
+    configuration.preferences.javaScriptEnabled = YES;
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:configuration];
     self.webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.webView.navigationDelegate = self;
@@ -51,8 +61,12 @@ static NSString *const ORYandexShelfURL = @"https://books.yandex.ru/my/books/all
                                     UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
     [self.view addSubview:self.spinner];
 
-    NSURL *url = [NSURL URLWithString:ORYandexShelfURL];
-    if (url) [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+    NSURL *url = [NSURL URLWithString:ORYandexPassportLoginURL];
+    if (url) {
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+        req.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+        [self.webView loadRequest:req];
+    }
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -67,6 +81,10 @@ static NSString *const ORYandexShelfURL = @"https://books.yandex.ru/my/books/all
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
+- (void)refresh {
+    [self.webView reload];
+}
+
 - (void)finish {
     [self.spinner startAnimating];
     [ORYandexSession captureCookiesFromWebView:self.webView completion:^(NSString *header) {
@@ -77,7 +95,6 @@ static NSString *const ORYandexShelfURL = @"https://books.yandex.ru/my/books/all
                            message:@"Яндекс не выдал cookie сессии. Войдите в аккаунт на странице и нажмите «Готово» ещё раз."];
             return;
         }
-        self.doneItem.enabled = YES;
         if (self.onFinish) self.onFinish(YES, nil);
         [self dismissViewControllerAnimated:YES completion:nil];
     }];
@@ -91,10 +108,9 @@ static NSString *const ORYandexShelfURL = @"https://books.yandex.ru/my/books/all
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     [self.spinner stopAnimating];
-    // The passport may redirect through several hosts; the shelf page itself is
-    // the first moment the session cookies are guaranteed to be in place.
+    // Try to capture cookies on every navigation to a yandex domain
     NSString *host = webView.URL.host.lowercaseString ?: @"";
-    if ([host containsString:@"books.yandex"] || [host containsString:@"yandex.ru"]) {
+    if ([host containsString:@"yandex"] || [host containsString:@"passport"]) {
         [ORYandexSession captureCookiesFromWebView:webView completion:^(NSString *header) {
             if (header.length > 0) self.doneItem.enabled = YES;
         }];
@@ -103,11 +119,22 @@ static NSString *const ORYandexShelfURL = @"https://books.yandex.ru/my/books/all
 
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     [self.spinner stopAnimating];
-    NSLog(@"[OmniReader] Yandex web login failed: %@", error.localizedDescription);
+    if (error.code != NSURLErrorCancelled) {
+        NSLog(@"[OmniReader] Yandex web login failed: %@", error.localizedDescription);
+    }
 }
 
 - (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     [self.spinner stopAnimating];
+    if (error.code != NSURLErrorCancelled) {
+        NSLog(@"[OmniReader] Yandex web login error: %@", error.localizedDescription);
+    }
+}
+
+// Allow all navigation (including redirects to passport, oauth, etc.)
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
+                                                       decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    decisionHandler(WKNavigationActionPolicyAllow);
 }
 
 @end
