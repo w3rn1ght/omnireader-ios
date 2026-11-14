@@ -58,14 +58,15 @@
     [self.spinner startAnimating];
     __weak typeof(self) weakSelf = self;
     [ORYandexAPI fetchShelf:^(NSArray<NSDictionary *> *items, NSError *error) {
+        // ORHTTP completes off the main thread.
+        dispatch_async(dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         [strongSelf.spinner stopAnimating];
         [strongSelf.tableView.refreshControl endRefreshing];
         if (error) {
             NSLog(@"[OmniReader] Yandex shelf failed: %@", error);
-            [ORUtil presentAlertIn:strongSelf title:@"Яндекс Книги"
-                            message:error.localizedDescription ?: @"Не удалось загрузить полку."];
+            [strongSelf presentShelfError:error];
             return;
         }
         strongSelf.items = items ?: @[];
@@ -73,6 +74,43 @@
         if (strongSelf.items.count == 0) {
             [ORUtil presentAlertIn:strongSelf title:@"Полка пуста"
                             message:@"Аккаунт подключён, но книг не найдено. Подробности — в Docs/YANDEX.md; купленные файлы можно добавить через «+» → «Импортировать файл»."];
+        }
+        });
+    }];
+}
+
+/// A closed shelf is the most common failure, so offer the session login right
+/// in the error dialog instead of sending the user to the settings screen.
+- (void)presentShelfError:(NSError *)error {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Яндекс Книги"
+                                                                  message:error.localizedDescription
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    if (error.code == 422 || error.code == 401) {
+        [alert addAction:[UIAlertAction actionWithTitle:@"Войти через сайт"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *action) {
+            [self signInWithWebSession];
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Проверить токен"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *action) {
+            [self debugCheckToken];
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:@"Закрыть" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)signInWithWebSession {
+    __weak typeof(self) weakSelf = self;
+    [[ORYandexAuth shared] signInWithWebSessionFrom:self completion:^(BOOL success, NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        [strongSelf.tableView reloadData];
+        if (success) {
+            [strongSelf loadShelf];
+        } else if (error && error.code != 6) {
+            [ORUtil presentAlertIn:strongSelf title:@"Яндекс Книги" message:error.localizedDescription];
         }
     }];
 }
@@ -102,11 +140,11 @@
 
     if (![ORYandexAuth shared].isSignedIn) {
         if (indexPath.row == 0) {
-            cell.textLabel.text = @"Войти в Яндекс";
-            cell.detailTextLabel.text = @"Откроется системное окно OAuth";
+            cell.textLabel.text = @"Войти через сайт Яндекса";
+            cell.detailTextLabel.text = @"Откроется books.yandex.ru — нужна для полки";
         } else if (indexPath.row == 1) {
-            cell.textLabel.text = @"Войти через Safari";
-            cell.detailTextLabel.text = @"Если окно внутри приложения не реагирует";
+            cell.textLabel.text = @"Войти по OAuth";
+            cell.detailTextLabel.text = @"Системное окно; нужен Client ID";
         } else if (indexPath.row == 2) {
             cell.textLabel.text = @"Ссылка для входа на компьютере";
             cell.detailTextLabel.text = @"Скопировать и открыть на ПК, затем вставить токен";
@@ -161,9 +199,9 @@
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     if (![ORYandexAuth shared].isSignedIn) {
         if (indexPath.row == 0) {
-            [self signIn];
+            [self signInWithWebSession];
         } else if (indexPath.row == 1) {
-            [self signInWithSafari];
+            [self signIn];
         } else if (indexPath.row == 2) {
             [self copyAuthorizationLink];
         } else {
@@ -239,6 +277,8 @@
     self.view.userInteractionEnabled = NO;
     __weak typeof(self) weakSelf = self;
     [ORYandexAPI resolveDownloadForItem:item completion:^(NSURL *url, NSString *format, NSError *error) {
+        // ORHTTP completes off the main thread.
+        dispatch_async(dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         if (!url) {
@@ -273,6 +313,8 @@
                  headers:@{@"Authorization": [NSString stringWithFormat:@"OAuth %@", [ORSettings shared].yandexToken ?: @""]}
                   toPath:destination
               completion:^(NSString *path, NSError *downloadError) {
+            // ORHTTP completes on the session's background queue.
+            dispatch_async(dispatch_get_main_queue(), ^{
             strongSelf.view.userInteractionEnabled = YES;
             [strongSelf.spinner stopAnimating];
             if (!path) {
@@ -298,7 +340,9 @@
                 [ORUtil presentAlertIn:strongSelf title:@"Добавлено"
                                 message:[NSString stringWithFormat:@"«%@» в библиотеке.", book.title]];
             }];
+            });
         }];
+    });
     }];
 }
 

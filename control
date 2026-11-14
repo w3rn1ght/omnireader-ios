@@ -1,8 +1,8 @@
 Package: com.w3rn1ght.omnireader
 Name: OmniReader
-Version: 1.4.5
+Version: 1.4.6
 Architecture: iphoneos-arm
-Description: Universal document and book reader for jailbroken iOS 12: PDF, EPUB, FB2, TXT, MOBI, CBZ, Office documents, audiobooks and Yandex Books.
+Description: Universal document and book reader for jailbroken iOS 12: PDF, EPUB, FB2, TXT, MOBI, CBZ, DjVu, Office documents, audiobooks and Yandex Books.
 Homepage: https://github.com/w3rn1ght/omnireader-ios
 Maintainer: w3rn1ght
 Author: w3rn1ght

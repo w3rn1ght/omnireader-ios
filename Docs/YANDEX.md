@@ -4,8 +4,8 @@
 
 Сайт `books.yandex.ru` — Next.js-приложение, которое общается с Apollo GraphQL по адресу
 `https://books.yandex.ru/node-api/bff-graphql-api/`. REST-путей вроде `/api/v1/library` **не существует** —
-они отвечают 404. Поэтому с версии 1.3.0 приложение сначала пробует GraphQL (`me { id login displayName }`,
-`me { library(first: N) { items { ... } } }`), а REST остаётся только запасным вариантом.
+они отвечают 404. Поэтому с версии 1.3.0 приложение сначала пробует GraphQL (`userProfile`, `viewer`, `me`),
+а REST остаётся только запасным вариантом.
 
 Если GraphQL отвечает `GRAPHQL_VALIDATION_FAILED` / `Cannot query field`, значит Яндекс изменил схему:
 поправьте запрос в `ORYandexAPI.m` (`+fetchShelf:`, `+fetchProfile:`). Кнопка **Настройки → Яндекс Книги → Статус**
@@ -24,17 +24,20 @@
 
 Два способа:
 
-1. **OAuth через браузер.** В «Настройки → Яндекс Книги → Client ID OAuth» укажите `client_id` приложения, зарегистрированного на [oauth.yandex.ru](https://oauth.yandex.ru). В качестве Redirect URI должно быть разрешено `omnireader://oauth`. Затем «Войти в аккаунт» — откроется системное окно авторизации (`ASWebAuthenticationSession`), токен сохранится в Keychain.
-2. **Токен вручную.** «Настройки → Вставить токен» или кнопка в диалоге Client ID. Токен также попадает в Keychain (`kSecClassGenericPassword`, сервис `com.w3rn1ght.omnireader`, аккаунт `yandex.token`).
+1. **Вход через сайт (рекомендуется для полки).** Нажмите «Войти через сайт Яндекса» — откроется `books.yandex.ru` внутри приложения. Войдите в аккаунт Яндекса обычным способом. Приложение сохранит Passport cookie, и **личная полка («Мои книги») станет доступна**. Это единственный способ прочитать полку, потому что эндпоинт `p-graphql` отдаёт её только при наличии веб-сессии (OAuth-токен по себе не работает — сервер отвечает `Whitelist: query not found`).
 
-Выход удаляет токен из Keychain.
+2. **OAuth (устаревший, профиль без полки).** В «Настройки → Яндекс Книги → Client ID OAuth» укажите `client_id` приложения, зарегистрированного на [oauth.yandex.ru](https://oauth.yandex.ru). В качестве Redirect URI должно быть разрешено `omnireader://oauth`. Затем «Войти по OAuth» — откроется системное окно авторизации (`ASWebAuthenticationSession`), токен сохранится в Keychain. **Этот способ даёт доступ к профилю и публичным полкам, но личная полка не откроется** (требуется веб-сессия, см. выше).
 
-### Если кнопки в окне авторизации не нажимаются
+3. **Токен вручную.** «Настройки → Вставить токен» или кнопка в диалоге Client ID. Токен также попадает в Keychain (`kSecClassGenericPassword`, сервис `com.w3rn1ght.omnireader`, аккаунт `yandex.token`).
+
+Выход удаляет токен из Keychain **и** очищает сохранённую веб-сессию.
+
+### Если кнопки в окне OAuth не нажимаются
 
 На iOS 12 встроенное окно (`ASWebAuthenticationSession`) иногда показывает форму Яндекса, но кнопки в ней не реагируют: страница использует современный JS и/или ждёт cookie, которые недоступны в урезанном Safari. Поле ввода при этом работает. Порядок действий:
 
 1. **Настройки iPhone → Safari** — выключите «Блокировать все cookie» и «Предотвращать перекрёстное отслеживание», затем попробуйте снова.
-2. В экране «Яндекс Книги» выберите **«Войти через Safari»**. После входа Safari предложит открыть `omnireader://oauth#access_token=…` в приложении — токен сохранится автоматически (`ORAppDelegate → [ORYandexAuth handleCallbackURL:]`).
+2. В экране «Яндекс Книги» выберите **«Войти по OAuth»**. После входа Safari предложит открыть `omnireader://oauth#access_token=…` в приложении — токен сохранится автоматически (`ORAppDelegate → [ORYandexAuth handleCallbackURL:]`).
 3. Если и в Safari кнопки не работают — используйте вход **на компьютере**:
    - в приложении выберите **«Ссылка для входа на компьютере»** (ссылка копируется в буфер);
    - откройте её на ПК, войдите и разрешите доступ;
@@ -47,10 +50,10 @@
 
 ## Что делает приложение
 
-- `GET /api/v1/me` — имя пользователя для статуса в настройках.
-- `GET /api/v1/library` — полка (с фолбэком на `/api/library`).
-- По тапу на книгу — поиск прямой ссылки (`download_url`, `file_url`, `url`, …) или запрос `/api/v1/library/{id}`.
-- Если найден аудиофайл (`is_audio`, `audiobook`, `type: audio`) — поток отдаётся в `ORAudioPlayer` с заголовком `Authorization: OAuth <token>`; работает фон и экран блокировки.
+- `query Viewer { userProfile { login id name avatar { small large } } }` — профиль (любой рабочий корень из списка ниже).
+- `query MyBooksUserLibraryBooks($login: String!, $state: UserLibraryState!, ...)` — личная полка через `p-graphql` (требует веб-сессию).
+- По тапу на книгу — поиск прямой ссылки (`download_url`, `file_url`, `url`, …) или запрос `/node-api/p-graphql/` для файла.
+- Если найден аудиофайл (`isAudio`, `audiobook`, `type: audio`) — поток отдаётся в `ORAudioPlayer` с заголовком `Authorization: OAuth <token>`; работает фон и экран блокировки.
 - Книга скачивается во временный файл и импортируется в библиотеку (`source = yandex`, `remoteID` сохраняется).
 
 ## Ограничения и правовая позиция
@@ -67,13 +70,19 @@
 idevicesyslog | grep -i OmniReader
 ```
 
-Проверить токен можно вручную:
+Проверить веб-сессию можно вручную (нужен Cookie header из браузера):
 
 ```sh
-curl -H "Authorization: OAuth $TOKEN" https://books.yandex.ru/api/v1/library
+curl -H "Cookie: <вставьте cookie от books.yandex.ru>" \
+     -H "Origin: https://books.yandex.ru" \
+     -H "Referer: https://books.yandex.ru/my/books/all" \
+     -H "Apollo-Require-Preflight: true" \
+     -H "Content-Type: application/json" \
+     -d '{"query":"query { userProfile { login id name } }"}' \
+     https://books.yandex.ru/node-api/bff-graphql-api/
 ```
 
-Если этот запрос возвращает JSON — приложение покажет полку; если 404/401, скорректируйте пути в `ORYandexAPI.m`.
+Если этот запрос возвращает JSON с профилем — веб-сессия работает; если `Whitelist: query not found`, сессия не принята.
 
 ## Ввод токена не даёт видимого результата
 
@@ -120,22 +129,25 @@ curl -H "Authorization: OAuth $TOKEN" https://books.yandex.ru/api/v1/library
 
 ```
 POST https://books.yandex.ru/node-api/p-graphql/
-query MyBooksLibraryCards($login: String!, $cursor: String!, $limit: Int!,
-                          $sort: UserLibrarySortType!, $filters: UserLibraryFiltersInput!) {
+query MyBooksUserLibraryBooks($login: String!, $state: UserLibraryState!, $contentFilter: UserLibraryContentFilter, $cursor: String, $step: Int!) {
   user(login: $login) {
     library {
-      libraryCards(params: {cursor: $cursor, limit: $limit,
-                            sort: $sort, filters: $filters}) {
+      books(params: {state: $state, contentFilter: $contentFilter, cursor: $cursor, step: $step}) {
         cursor
-        page { ...FMyBooksLibraryCard }
+        page {
+          __typename
+          ...FMyBooksTextBook
+          ...FMyBooksAudioBook
+          ...FMyBooksComicBook
+          ...FMyBooksTextSerial
+        }
       }
     }
   }
 }
 ```
 
-`sort` — `UPDATED_AT` или `ADDED_AT`; `filters` — `{advancedFilters: [],
-contentTypeFilters: []}` (плюс `statusFilter: FINISHED | IN_PROGRESS | PENDING`).
+`state` — `ADDED | ALL | FINISHED | OPENED`; `contentFilter` — `TEXTBOOK | AUDIOBOOK | COMICBOOK | TEXTSERIAL`.
 
 Эндпоинт `p-graphql` отдаёт только запросы из серверного whitelist и, судя по
 поведению, привязан к веб-сессии (Passport cookie). С OAuth-токеном без cookie
@@ -143,7 +155,15 @@ contentTypeFilters: []}` (плюс `statusFilter: FINISHED | IN_PROGRESS | PENDI
 
 1. показывает профиль и счётчик книг, если сервер их отдал;
 2. при ошибке whitelist объясняет, что полка недоступна OAuth-клиенту,
-   и предлагает импортировать файл вручную.
+   и предлагает **войти через сайт** (кнопка в алерте ошибки) или импортировать файл вручную.
 
 Если Яндекс откроет `p-graphql` для OAuth, адаптер уже отправляет точный
-документ `MyBooksLibraryCards`, поэтому полка заработает без изменений кода.
+документ `MyBooksUserLibraryBooks`, поэтому полка заработает без изменений кода.
+
+## Что нового в 1.4.6 (эти правки)
+
+- Добавлен **вход через сайт** (WKWebView на `books.yandex.ru/my/books/all`) — единственный рабочий способ получить доступ к личной полке.
+- Веб-сессия (Passport cookie) сохраняется в Keychain и автоматически подставляется в запросы к `p-graphql`.
+- OAuth оставлен как альтернатива для профиля/публичных полок, но с предупреждением, что личная полка через него не работает.
+- Все колбэки ORHTTP теперь правильно диспатчятся на главный поток (исправлены краши UI).
+- Ошибка «Whitelist: query not found» теперь показывает понятное сообщение с предложением войти через сайт.

@@ -1,6 +1,8 @@
 #import "ORYandexAuth.h"
 #import "ORCore.h"
 #import "ORYandexAPI.h"
+#import "ORYandexSession.h"
+#import "ORYandexWebLoginController.h"
 #import "ORText.h"
 #import "ORUtil.h"
 #import <AuthenticationServices/AuthenticationServices.h>
@@ -27,7 +29,7 @@ NSNotificationName const ORYandexAuthDidChangeNotification = @"ORYandexAuthDidCh
 }
 
 - (BOOL)isSignedIn {
-    return [ORSettings shared].yandexToken.length > 0;
+    return [ORSettings shared].yandexToken.length > 0 || [ORYandexSession hasSession];
 }
 
 - (NSString *)token {
@@ -90,6 +92,7 @@ NSNotificationName const ORYandexAuthDidChangeNotification = @"ORYandexAuthDidCh
 - (void)signOut {
     [ORSettings shared].yandexToken = nil;
     [ORSettings shared].yandexUserName = nil;
+    [ORYandexSession clearSession];
     [[NSNotificationCenter defaultCenter] postNotificationName:ORYandexAuthDidChangeNotification object:self];
 }
 
@@ -152,6 +155,36 @@ NSNotificationName const ORYandexAuthDidChangeNotification = @"ORYandexAuthDidCh
         completion(NO, [NSError errorWithDomain:@"OmniReader.Yandex" code:4
                                        userInfo:@{NSLocalizedDescriptionKey: @"Не удалось открыть окно авторизации"}]);
     }
+}
+
+- (void)signInWithWebSessionFrom:(UIViewController *)host
+                      completion:(void (^)(BOOL, NSError *))completion {
+    if (!host) return;
+    ORYandexWebLoginController *login = [[ORYandexWebLoginController alloc] init];
+    __weak typeof(self) weakSelf = self;
+    login.onFinish = ^(BOOL success, NSString *message) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        [[NSNotificationCenter defaultCenter] postNotificationName:ORYandexAuthDidChangeNotification object:strongSelf];
+        if (!success) {
+            if (completion) {
+                completion(NO, [NSError errorWithDomain:@"OmniReader.Yandex" code:6
+                                              userInfo:@{NSLocalizedDescriptionKey: message ?: @"Вход не завершён"}]);
+            }
+            return;
+        }
+        // The token, when present, still resolves the display name; with a
+        // cookie-only session the profile call is best effort.
+        [ORYandexAPI fetchProfile:^(NSString *name, NSError *error) {
+            [ORUtil runOnMain:^{
+                if (name.length > 0) [ORSettings shared].yandexUserName = name;
+                if (completion) completion(YES, nil);
+            }];
+        }];
+    };
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:login];
+    nav.modalPresentationStyle = UIModalPresentationFormSheet;
+    [host presentViewController:nav animated:YES completion:nil];
 }
 
 + (NSString *)valueForParameter:(NSString *)name inQuery:(NSString *)query {

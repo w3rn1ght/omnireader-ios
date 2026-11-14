@@ -119,6 +119,9 @@
     [self.spinner startAnimating];
     __weak typeof(self) weakSelf = self;
     [OROPDS loadFeedAtURL:url catalog:self.catalog completion:^(NSDictionary *feed, NSError *error) {
+        // ORHTTP completes on the session's background queue; every UIKit call
+        // below has to happen on the main thread.
+        dispatch_async(dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf.loading = NO;
@@ -136,6 +139,7 @@
         strongSelf.entries = feed[@"entries"] ?: @[];
         strongSelf.baseEntries = strongSelf.entries;
         [strongSelf.tableView reloadData];
+        });
     }];
 }
 
@@ -310,6 +314,7 @@
     self.view.userInteractionEnabled = NO;
     __weak typeof(self) weakSelf = self;
     [OROPDS downloadEntry:entry catalog:self.catalog formatHint:nil completion:^(NSString *path, NSString *suggestedName, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf.view.userInteractionEnabled = YES;
@@ -341,6 +346,7 @@
             [ORUtil presentAlertIn:strongSelf title:@"Готово"
                             message:[NSString stringWithFormat:@"«%@» добавлена в библиотеку.", book.title]];
         }];
+        });
     }];
 }
 

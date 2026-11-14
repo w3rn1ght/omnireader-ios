@@ -66,6 +66,10 @@
 
     // Plain links, JS buttons and redirects used by OPDS book pages.
     collect(@"<a[^>]+href\\s*=\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
+    // Some Drupal templates render unquoted attributes; keep those too.
+    collect(@"<a[^>]+href\\s*=\\s*([^\\s>\"']+)(?=[\\s>])", NSRegularExpressionCaseInsensitive);
+    // Download forms post to the real file endpoint.
+    collect(@"<form[^>]+action\\s*=\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
     collect(@"window\\.open\\s*\\(\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
     collect(@"window\\.open\\s*\\(\\s*&quot;([^&]+)&quot;", NSRegularExpressionCaseInsensitive);
     collect(@"(?:window\\.)?location(?:\\.href)?\\s*=\\s*[\"']([^\"']+)[\"']", NSRegularExpressionCaseInsensitive);
@@ -83,12 +87,15 @@
     NSString *best = nil;
     NSInteger bestScore = 0;
     for (NSString *href in raw) {
-        NSString *lower = href.lowercaseString;
+        // Anchors often carry &amp; in the query string; resolving it verbatim
+        // sends the server a parameter literally named "amp;format".
+        NSString *decodedHref = [self unescapeXML:href];
+        NSString *lower = decodedHref.lowercaseString;
         if (lower.length == 0 || [lower hasPrefix:@"#"] || [lower hasPrefix:@"javascript:"] ||
             [lower hasPrefix:@"mailto:"] || [lower hasPrefix:@"data:"]) {
             continue;
         }
-        NSString *absolute = [self absoluteURL:href base:baseURL];
+        NSString *absolute = [self absoluteURL:decodedHref base:baseURL];
         if (absolute.length == 0 || [absolute isEqualToString:baseURL]) continue;
         NSURL *url = [NSURL URLWithString:absolute];
         NSString *host = url.host.lowercaseString ?: @"";
@@ -136,11 +143,21 @@
                                                       range:NSMakeRange(0, path.length)];
     if (match) {
         NSString *root = [path substringWithRange:[match rangeAtIndex:1]];
+        // Flibusta/Coollib/lib.rus.ec serve the file at /b/<id>/<format>; this
+        // is the endpoint their own «Скачать» button points at. The older
+        // /download/?format= form is tried afterwards as a fallback.
+        for (NSString *format in @[@"fb2", @"epub", @"pdf", @"txt", @"mobi", @"djvu"]) {
+            NSString *candidate = [NSString stringWithFormat:@"%@/%@", root, format];
+            NSString *absolute = [self absoluteURL:candidate base:entryURL];
+            if (absolute.length > 0) [result addObject:absolute];
+        }
         for (NSString *format in @[@"fb2.zip", @"epub", @"pdf", @"txt.zip"]) {
             NSString *candidate = [NSString stringWithFormat:@"%@/download/?format=%@", root, format];
             NSString *absolute = [self absoluteURL:candidate base:entryURL];
             if (absolute.length > 0) [result addObject:absolute];
         }
+        NSString *downloadPage = [self absoluteURL:[root stringByAppendingString:@"/download"] base:entryURL];
+        if (downloadPage.length > 0) [result addObject:downloadPage];
     }
     if ([path hasSuffix:@"/download"]) {
         for (NSString *format in @[@"fb2.zip", @"epub"]) {
@@ -309,6 +326,11 @@
             if (summary.length > 0) entry[@"summary"] = summary;
             NSString *identifier = [[entryNode firstChildNamed:@"id"] innerText];
             if (identifier.length > 0) entry[@"id"] = identifier;
+            // Flibusta/lib.rus.ec publish <rights>Заблокировано!</rights> for
+            // books the catalogue refuses to serve; knowing this up front keeps
+            // the downloader from chasing a landing page that has no file.
+            NSString *rights = [[entryNode firstChildNamed:@"rights"] innerText];
+            if (rights.length > 0) entry[@"rights"] = rights;
 
             NSMutableArray *entryLinks = [NSMutableArray array];
             NSString *imageURL = nil;
@@ -398,6 +420,27 @@
            formatHint:(NSString *)formatHint
            completion:(OROPDSDownloadCompletion)completion {
     if (!completion) return;
+
+    // Some catalogues advertise a book but refuse to hand out the file. The
+    // feed says so in <rights>; fail with that text instead of downloading a
+    // landing page and reporting a generic "server returned a web page".
+    NSString *rights = entry[@"rights"];
+    if (rights.length > 0) {
+        NSString *lower = rights.lowercaseString;
+        if ([lower containsString:@"заблок"] || [lower containsString:@"blocked"] ||
+            [lower containsString:@"недоступ"] || [lower containsString:@"unavailable"] ||
+            [lower containsString:@"нет файла"]) {
+            completion(nil, nil, [NSError errorWithDomain:@"OmniReader.OPDS" code:8
+                                                userInfo:@{NSLocalizedDescriptionKey:
+                                                               [NSString stringWithFormat:
+                                                                @"Каталог не отдаёт эту книгу: %@\n\n"
+                                                                 "Это ограничение самого каталога, а не приложения. "
+                                                                 "Можно открыть страницу книги в Safari и скачать вручную.",
+                                                                rights]}]);
+            return;
+        }
+    }
+
     NSArray<NSDictionary *> *links = entry[@"links"] ?: @[];
 
     NSDictionary *chosen = nil;
@@ -733,6 +776,11 @@
 
         if (identifier.length == 0) identifier = [self attribute:@"id" inTag:
             (tags.firstObject ?: @"")];
+        NSString *rights = [ORText firstMatchPattern:@"(?is)<rights[^>]*>(.*?)</rights>"
+                                            inString:chunk
+                                               group:1];
+        rights = [[self unescapeXML:[ORText stripHTML:rights ?: @""]]
+                  stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         NSMutableDictionary *entry = [NSMutableDictionary dictionary];
         if (title.length > 0) entry[@"title"] = title;
         if (author.length > 0) entry[@"author"] = author;
@@ -744,6 +792,7 @@
         }
         entry[@"id"] = identifier ?: @"";
         entry[@"links"] = entryLinks;
+        if (rights.length > 0) entry[@"rights"] = rights;
         if (imageURL.length > 0) entry[@"image"] = imageURL;
 
         BOOL navigation = NO;

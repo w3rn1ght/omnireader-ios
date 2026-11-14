@@ -4,6 +4,7 @@
 #import "ORReaderSettingsController.h"
 #import "ORUtil.h"
 #import "ORYandexAuth.h"
+#import "ORYandexSession.h"
 #import "ORCatalogLogin.h"
 
 @implementation ORSettingsViewController
@@ -21,7 +22,7 @@
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     switch (section) {
         case 0: return 2;
-        case 1: return 3;
+        case 1: return 4;
         case 2: return 2;
         case 3: return [ORSettings shared].opdsCatalogs.count + 1;
         default: return 3;
@@ -75,10 +76,16 @@
         }
     } else if (indexPath.section == 1) {
         BOOL signedIn = [ORYandexAuth shared].isSignedIn;
+        BOOL hasSession = [ORYandexSession hasSession];
         if (indexPath.row == 0) {
             cell.textLabel.text = signedIn ? @"Выйти из аккаунта" : @"Войти в аккаунт";
             cell.textLabel.textColor = signedIn ? [UIColor redColor] : self.view.tintColor;
         } else if (indexPath.row == 1) {
+            cell.textLabel.text = hasSession ? @"Обновить сессию сайта" : @"Войти через сайт Яндекса";
+            cell.detailTextLabel.text = hasSession ? @"Сохранена" : @"нужна для полки";
+            cell.textLabel.textColor = self.view.tintColor;
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        } else if (indexPath.row == 2) {
             cell.textLabel.text = @"Статус";
             cell.detailTextLabel.text = signedIn ? ([ORSettings shared].yandexUserName ?: @"Подключено") : @"Не подключено";
             cell.selectionStyle = signedIn ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
@@ -160,8 +167,17 @@
 
     if (indexPath.section == 1) {
         ORYandexAuth *auth = [ORYandexAuth shared];
-        if (indexPath.row == 1 && auth.isSignedIn) {
+        if (indexPath.row == 2 && auth.isSignedIn) {
             [self verifyYandexToken];
+            return;
+        }
+        if (indexPath.row == 1) {
+            [auth signInWithWebSessionFrom:self completion:^(BOOL success, NSError *error) {
+                [tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationAutomatic];
+                if (!success && error && error.code != 6) {
+                    [ORUtil presentAlertIn:self title:@"Яндекс Книги" message:error.localizedDescription];
+                }
+            }];
             return;
         }
         if (indexPath.row == 0) {
@@ -176,7 +192,7 @@
                     }
                 }];
             }
-        } else if (indexPath.row == 2) {
+        } else if (indexPath.row == 3) {
             [self editYandexClientID];
         }
         return;

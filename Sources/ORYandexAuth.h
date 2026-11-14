@@ -27,6 +27,12 @@ extern NSNotificationName const ORYandexAuthDidChangeNotification;
 - (void)signInFrom:(UIViewController *)host
         completion:(void (^)(BOOL success, NSError *_Nullable error))completion;
 
+/// Opens books.yandex.ru in an in-app web view and keeps the Passport cookies.
+/// The personal shelf (p-graphql) is only served to a browser session, so this
+/// is the sign-in route that actually unlocks «Мои книги».
+- (void)signInWithWebSessionFrom:(UIViewController *)host
+                      completion:(nullable void (^)(BOOL success, NSError *_Nullable error))completion;
+
 - (void)promptForManualTokenFrom:(UIViewController *)host
                       completion:(nullable void (^)(BOOL success, NSError *_Nullable error))completion;
 
